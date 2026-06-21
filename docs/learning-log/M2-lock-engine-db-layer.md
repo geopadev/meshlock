@@ -40,3 +40,50 @@ The two-package pattern: what @types/* packages contain and why some libraries n
 The risk side of type assertions — that `as` overrides the checker and won't catch a runtime mismatch (Q3, partial)
 The ESM replacement for __dirname and why __dirname doesn't exist under "type": "module" (Q4)
 Why atomic transactions matter for crash safety — what breaks if the schema change and the bookkeeping insert are separate steps (Q5)
+
+---
+
+## M2.2 — lock engine functions and race handling (2026-06-21)
+
+**Built:** Five exported functions over MeshLockDatabase: acquireLock (check-and-set
+inside a BEGIN IMMEDIATE transaction, returns a discriminated union — ok/conflict —
+not a throw), releaseLock (ownership-guarded delete), checkLock (live vs expired
+vs free), listLocks (non-expired rows), expireStaleLocks (sweep by expiry). Exported
+TypeScript types for inputs and results (Lock, LockMode, AcquireResult, CheckResult).
+11 tests covering conflict, same-session refresh, release ownership, TTL expiry,
+stale sweep, and IMMEDIATE concurrency contention.
+
+**Why this design:** Conflict is an expected outcome, not a programmer error — returning
+a discriminated union forces callers to handle it explicitly rather than catching an
+exception they might silently swallow. BEGIN IMMEDIATE serializes the read-then-write
+at BEGIN so two connections can never both pass the "no lock" check and collide on
+the write. ISO-8601 strings sort lexically in chronological order, so expiry checks
+work as plain string comparisons without parsing.
+
+**Concepts:** discriminated unions, type narrowing, interface vs type, UPSERT
+(INSERT ON CONFLICT DO UPDATE), BEGIN IMMEDIATE vs deferred transactions,
+error.code vs error.message, SQLite changes count, ISO-8601 lexical ordering
+
+**Interview Qs:**
+Q: AcquireResult is a discriminated union with ok as the discriminant. After you write if (result.ok === false), why does TypeScript let you access result.heldBy inside that block but not result.lock? What's this behaviour called?
+A: it's because we implicitely told it to use held by and it doesn't know what .lock is. (Got the outcome right — inside the block .lock isn't accessible — but the mechanism was vague. Did not name "type narrowing" or explain that TypeScript eliminates the ok: true branch from the union based on the if condition alone.)
+
+Q: Why does acquireLock use BEGIN IMMEDIATE instead of the default deferred transaction? Describe the specific bad sequence that could happen between two connections if it used deferred.
+A: it uses begin immediate instead of the default deferred because with deferred two agents can aquire the same lock whereas with begin immediate it goes through the database and the first one who acquires gets it and the one who doesn't has to wait. (Got the conclusion right but skipped the mechanism: both connections read "no lock," both decide to write, only then do they collide — the check and the act aren't atomic with deferred.)
+
+Q: The code compares timestamps with existing.expires_at > now — plain string > on two ISO-8601 strings, no Date parsing. Why is that correct rather than a lucky accident?
+A: I don't know.
+
+Q: releaseLock deletes with WHERE path = ? AND session_id = ? and returns result.changes > 0. Explain how this one query makes "releasing a lock you don't own" a harmless no-op rather than an error — without any explicit ownership if check.
+A: because it doesn't match with any tables so no harm done. (Right direction — zero rows affected — but imprecise: it matches the right table, just zero rows, because the session_id in the WHERE doesn't match the holder's.)
+
+Q: My concurrency test first failed because I wrote /SQLITE_BUSY/.test(String(err)) and the error message was actually "database is locked". What was the underlying mistake about where SQLITE_BUSY lives on the error object, and what's the general lesson about asserting on caught errors?
+A: I didn't fully grasp the concept nor understand.
+
+**Still fuzzy:**
+
+What type narrowing is mechanically — that TypeScript eliminates union branches based on what the if condition proves, not what you "told it" (Q1)
+The exact deferred failure sequence — both connections passing the read before either writes (Q2, partial)
+Why ISO-8601 string comparison is correct: fixed-width, zero-padded, largest unit first (Q3)
+The distinction between "matching no rows" and "matching no tables" — the WHERE filters rows within the right table (Q4, partial)
+Error object structure: .code vs .message, and why structured properties are more reliable than stringified messages (Q5)
