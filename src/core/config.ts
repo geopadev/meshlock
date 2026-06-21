@@ -19,6 +19,10 @@ export function getConfigPath(): string {
   return join(homedir(), ".meshlock", "config.json");
 }
 
+export function getDatabasePath(): string {
+  return join(homedir(), ".meshlock", "meshlock.db");
+}
+
 export function defaultConfig(): Config {
   return {
     mode: "solo",

@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
@@ -30,12 +30,14 @@ const MIGRATIONS_DIR = join(
  * Open the database at `path`, enable WAL journaling, ensure the migrations
  * bookkeeping table exists, and apply any not-yet-recorded migrations in
  * filename order. Each migration runs inside its own transaction so a failure
- * leaves the database unchanged for that migration.
+ * leaves the database unchanged for that migration. Creates the parent
+ * directory if it does not already exist.
  *
  * @param path Filesystem path to the SQLite file. Parameterized so tests can
  *   pass a temp path instead of the real `~/.meshlock` location.
  */
 export function openDatabase(path: string): MeshLockDatabase {
+  mkdirSync(dirname(path), { recursive: true });
   const db = new Database(path);
   // WAL = write-ahead logging: better concurrency (readers don't block the
   // writer) and durability characteristics suited to a long-lived daemon.
