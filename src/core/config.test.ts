@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 // Redirect homedir so config.ts writes to a temp dir instead of ~/.meshlock
 let tempHome: string;
@@ -15,7 +15,7 @@ vi.mock("node:os", async (importOriginal) => {
 });
 
 // Import after the mock is in place
-const { loadConfig, saveConfig, getConfigPath, defaultConfig, ConfigSchema } =
+const { loadConfig, saveConfig, getConfigPath, getDatabasePath, defaultConfig, ConfigSchema } =
   await import("./config.js");
 
 describe("config", () => {
@@ -169,5 +169,10 @@ describe("config", () => {
     const a = defaultConfig();
     const b = defaultConfig();
     expect(a.session_id).not.toBe(b.session_id);
+  });
+
+  it("getDatabasePath ends with meshlock.db in the same dir as getConfigPath", () => {
+    expect(getDatabasePath()).toMatch(/meshlock\.db$/);
+    expect(dirname(getDatabasePath())).toBe(dirname(getConfigPath()));
   });
 });
