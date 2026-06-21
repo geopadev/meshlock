@@ -87,3 +87,49 @@ The exact deferred failure sequence — both connections passing the read before
 Why ISO-8601 string comparison is correct: fixed-width, zero-padded, largest unit first (Q3)
 The distinction between "matching no rows" and "matching no tables" — the WHERE filters rows within the right table (Q4, partial)
 Error object structure: .code vs .message, and why structured properties are more reliable than stringified messages (Q5)
+
+---
+
+## M2.2 (cont.) — lock engine test file (2026-06-21)
+
+**Built:** 12-test file for lock-engine.ts covering: conflict (ok:false, reason:held,
+heldBy, one row owned by A), same-session re-acquire (expires_at advances, one row),
+release ownership (B gets false, A gets true, checkLock reports free), TTL expiry via
+seeded past-expiry row (checkLock free, fresh acquire succeeds), listLocks (expired
+excluded), expireStaleLocks (count returned, live rows survive), and two concurrency
+tests (SQLITE_BUSY proof of write-lock contention; one-winner-one-conflict outcome
+across two connections).
+
+**Why this design:** seedLock helper inserts rows with arbitrary expiry timestamps,
+bypassing acquireLock which always sets expiry in the future — needed for expired-lock
+tests without real waiting. Split concurrency into two tests: one proves the IMMEDIATE
+write lock serializes connections (SQLITE_BUSY), one proves the winner/conflict outcome.
+Neither alone satisfies both requirements.
+
+**Concepts:** test helpers, optional parameters (path?), toEqual vs toBe for objects,
+seeding vs real calls, finally cleanup for leaked transactions, why two concurrency
+tests are needed
+
+**Interview Qs:**
+Q: Why did I write a separate seedLock helper that inserts rows with raw SQL, instead of just calling acquireLock to set up the expired-lock tests?
+A: (did not attempt)
+
+Q: In rowCount(conn, path?), the ? makes path optional. Why does TypeScript force the if (path === undefined) check before I can use path in .get(path)?
+A: (did not attempt)
+
+Q: The conflict test uses one expect(b).toEqual({...}) instead of three separate field checks. What does toEqual on the whole object catch that three separate toBe checks would not?
+A: (did not attempt)
+
+Q: There are two concurrency tests. Why isn't test 2 alone (one winner, one conflict) sufficient to prove the connections contend through BEGIN IMMEDIATE?
+A: (did not attempt)
+
+Q: In the finally block, why does if (connA.inTransaction) connA.exec("ROLLBACK") matter for other tests in the file, not just this one?
+A: for one agent to not stay locked after the test runs. (Right — an open transaction holds the write lock on the DB file; without the rollback, cleanup might not fully release it and the next test's openDatabase could be affected. Correct instinct, mechanism slightly incomplete.)
+
+**Still fuzzy:**
+
+Why seedLock exists — that acquireLock always writes future expiry, making past-expiry rows impossible without raw SQL (Q1)
+Optional parameters and TypeScript's string | undefined narrowing — why the check is required before use (Q2)
+toEqual vs three toBe checks — toEqual catches extra or misnamed fields, three checks don't (Q3)
+Why test 1 (SQLITE_BUSY) is needed alongside test 2 — sequential calls would pass test 2 even without IMMEDIATE (Q4)
+Transaction leak mechanism — Q5 instinct was right but the file-lock-to-next-test chain wasn't fully articulated
