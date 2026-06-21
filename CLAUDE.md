@@ -11,6 +11,10 @@ One concern per prompt. If in doubt, smaller is correct.
 - NO new dependencies without flagging: what, why, alternatives.
 - Strict TypeScript. No `any`. No `@ts-ignore`.
 - Every new module gets a vitest test. Run `pnpm test` before done.
+- After every build task, before the human commits, explain every file
+  changed as if teaching a JavaScript developer who is new to TypeScript.
+  Compare to JS equivalents where helpful. Include 5 quiz questions at
+  the end. Do NOT write code during the explanation.
 
 ## Required output after every task
 1. Files changed and what changed
