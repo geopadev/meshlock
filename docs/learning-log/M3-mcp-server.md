@@ -45,3 +45,46 @@ stdout vs stderr as two separate streams, and why stdout is reserved for the MCP
 What import.meta.url === argv[1] actually compares — module URL vs the launched script path (Q3)
 Who validates tool input (the SDK, before the handler) and that the same Zod schema becomes the advertised JSON Schema in tools/list (Q4)
 Why the fix went in server.ts not db.ts (scope), and what { recursive: true } guarantees about repeated calls (Q5)
+
+---
+
+## M3.1b — centralize DB path + dir creation (2026-06-21)
+
+**Built:** Moved the DB file path out of server.ts and into config.ts as getDatabasePath(),
+making config.ts the single source of truth for all MeshLock file locations. Moved the
+mkdirSync directory-creation guarantee into openDatabase itself, so any caller gets the
+directory for free instead of having to call mkdirSync first. server.ts boot path shrinks
+to two lines: get path, open DB.
+
+**Why this design:** Two problems existed — the DB path was duplicated across config.ts
+and a local helper in server.ts, and the responsibility for creating ~/.meshlock was in
+the wrong layer (the server, not the DB opener). Pushing mkdirSync into openDatabase
+means future callers can't forget to create the directory. getDatabasePath() in config.ts
+means the .meshlock folder name is defined in exactly one place.
+
+**Concepts:** Single source of truth, pushing responsibility to the right layer,
+{ recursive: true } as an idempotent mkdir, unused imports as a compile error in strict
+TypeScript, dirname() to get a file's parent directory.
+
+**Interview Qs:**
+Q: If you inlined join(homedir(), ".meshlock", "meshlock.db") directly in server.ts instead of creating getDatabasePath(), what problem would that create?
+A: I don't know. (Two places would know the folder name ".meshlock" — config.ts and server.ts. If you renamed the folder, you'd have to update both and could miss one. getDatabasePath() means the folder name lives in one place only.)
+
+Q: mkdirSync(dirname(path), { recursive: true }) now runs inside every openDatabase call, including every test's beforeEach. Why is this safe, and what would happen without { recursive: true } on the second call?
+A: it is safe because it creates the database where it needs to be created and if already created it doesn't throw an error. without recursive true it would throw an error. (Correct — { recursive: true } makes mkdirSync idempotent: first call creates the dir, every subsequent call is a no-op. Without it, the second call would throw EEXIST.)
+
+Q: Before this change, server.ts imported mkdirSync from node:fs and dirname from node:path. Both are now gone. What TypeScript rule means leaving an unused import is actually a problem, not just untidiness?
+A: it reads the files as modules? (Not quite — TypeScript's strict mode includes noUnusedLocals, which treats an unused import as a compile error. The import isn't causing a runtime problem; the compiler rejects it at build time so dead code can't accumulate silently.)
+
+Q: The test asserts dirname(getDatabasePath()) === dirname(getConfigPath()). What does this test actually prove, and why is that the right thing to check rather than the full path string?
+A: it checks that the types of the database are inferred from the config? (Not quite — it checks that the DB file and the config file sit in the same directory (.meshlock). Checking the full path would over-constrain the test to one specific machine's home dir. Checking just the parent dir proves the two paths share the same folder without hardcoding what that folder is.)
+
+Q: openDatabase is a low-level infrastructure function. We gave it a side effect: it now creates a directory. Name one scenario where adding a side effect to a low-level function could cause a problem.
+A: I don't know. (One example: if you call openDatabase in a read-only context — like a tool that only inspects an existing DB — it would silently create ~/.meshlock on a machine where you never intended to write anything. Side effects in low-level functions are invisible to callers who don't read the implementation.)
+
+**Still fuzzy:**
+
+Why getDatabasePath() matters — the "single source of truth" argument for avoiding duplication (Q1)
+What noUnusedLocals does and why TypeScript treats unused imports as errors in strict mode (Q3)
+What dirname(getDatabasePath()) === dirname(getConfigPath()) is actually asserting — same parent folder, not same full path (Q4)
+Why side effects in low-level functions are risky — invisible to callers, can fire in unexpected contexts (Q5)
