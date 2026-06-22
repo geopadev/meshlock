@@ -1,4 +1,5 @@
 import type { MeshLockDatabase } from "./db.js";
+import { DEFAULT_CROSS_BRANCH_MODE } from "./config.js";
 
 /**
  * Lock mode — the same vocabulary as config.ts `lock_mode` and the `mode`
@@ -37,7 +38,7 @@ export interface AcquireInput {
   timeoutSeconds: number;
   /** Git branch the lock belongs to. Omit or pass null for "no branch". */
   branch?: string | null;
-  /** How to handle a cross-branch conflict. Defaults to "block" (fail-safe). */
+  /** How to handle a cross-branch conflict. Defaults to DEFAULT_CROSS_BRANCH_MODE. */
   crossBranchMode?: CrossBranchMode;
 }
 
@@ -103,7 +104,7 @@ export function acquireLock(
 ): AcquireResult {
   const { path, sessionId, mode, timeoutSeconds } = input;
   const branch = input.branch ?? null;
-  const crossBranchMode = input.crossBranchMode ?? "block";
+  const crossBranchMode = input.crossBranchMode ?? DEFAULT_CROSS_BRANCH_MODE;
 
   // `branch IS ?` is null-safe equality: with a NULL bind it becomes `branch IS
   // NULL`, with a string it behaves like `=`. This is why two branchless locks

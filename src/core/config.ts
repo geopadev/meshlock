@@ -16,6 +16,13 @@ export const ConfigSchema = z.object({
 
 export type Config = z.infer<typeof ConfigSchema>;
 
+/**
+ * The single source of truth for the default cross-branch behaviour. Both the
+ * config default below and the lock engine's fallback import this, so the two
+ * can never drift apart (they did in M2.5, before this constant existed).
+ */
+export const DEFAULT_CROSS_BRANCH_MODE = "warn" as const;
+
 export function getConfigPath(): string {
   return join(homedir(), ".meshlock", "config.json");
 }
@@ -32,7 +39,7 @@ export function defaultConfig(): Config {
     lock_timeout: 1800,
     lock_mode: "exclusive",
     granularity: "file",
-    cross_branch_mode: "warn",
+    cross_branch_mode: DEFAULT_CROSS_BRANCH_MODE,
   };
 }
 
