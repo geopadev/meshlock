@@ -126,8 +126,18 @@ registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON
 - ✅ **M3.1b [architect-invented]:** refactor — centralize DB path (`getDatabasePath()` in
   config.ts) + move dir-creation into `openDatabase`. Pulled the `server.ts` workaround out.
   Files: config.ts, db.ts, server.ts, config.test.ts.
-- 📋 **M3.2 [architect-invented]:** the mutating tools (`acquire_lock`, `release_lock`).
-  NOT YET BUILT. Now deferred until AFTER M2.5 so it's built on the branch-aware engine.
+- ✅ **M3.2 [architect-invented]:** `acquire_lock` tool only (split from release_lock for cap).
+  simple-git enters (branch resolved in handler, before sync engine call — git I/O never in
+  the transaction). Branchless fallback (no repo/detached HEAD → null) tested. Double-default
+  bug FIXED: `DEFAULT_CROSS_BRANCH_MODE` constant in config.ts, imported by both defaultConfig
+  and engine fallback. Config DI'd into handler factory, loaded once in server.ts. 41 tests.
+  Files: acquire-lock.ts, acquire-lock.test.ts, config.ts, lock-engine.ts (constant swap only),
+  server.ts. Dep: simple-git ^3.36.0.
+- 📋 **M3.2b [architect-invented]:** `release_lock` tool. NOT YET BUILT. Next.
+- 📋 **M3.2c [architect-invented]:** factor branch-resolution into ONE shared cached helper
+  (core/git.ts or similar) used by both acquire & release. Fixes M3.2 issues #1 (resolve from
+  daemon cwd / repo root, NOT dirname(path) per-file) + #2 (no per-call git subprocess; cache
+  per-repo or resolve once per session). Built AFTER release_lock so the helper serves both.
 - 📋 **M3.3 [architect-invented]:** `team_status` tool + `meshlock init` registration.
   NOT YET BUILT.
 
@@ -164,23 +174,22 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M2.5 accepted → 📋 **M3.2 next** (mutating MCP tools:
-`acquire_lock`, `release_lock`). M3.2 is where `simple-git` finally enters (the tool
-resolves the branch and passes it into the branch-aware `acquireLock`), and where the
-double-default wiring fix + config→engine wiring test land.
+**Active milestone:** ✅ M3.2 accepted → 📋 **M3.2b next** (`release_lock` tool), then
+M3.2c (shared cached branch helper), then M3.3 (team_status + init), then M3.5 (change briefing).
 
 **Built & reviewed so far:** M1 (config), M2.1 (db), M2.2 (lock engine),
-M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine).
+M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock).
 
-**Held / queued:** M3.2 (mutating tools + simple-git + double-default fix), then M2.5b
-(plural-holder warning, after M3.2), then M3.3 (team_status + init), then M3.5 (change briefing).
+**Pending teaching:** Block 6 (NULL three-valued logic, undefined-vs-null, z.infer) proposed
+but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compound.
 
 **Backlog items captured (not lost):**
 - Ensure `data/migrations` ships in the published npm tarball (`files` field) — packaging risk.
 - Read-only DB open path (fail-if-missing) for when the first read-only caller appears.
 - Optional explicit `busy_timeout` pragma in db.ts (currently relying on better-sqlite3 default 5s).
 - Note near the ISO-8601 expiry comparison that all timestamps must share format (UTC Z, ms precision).
-- [M3.2] Single shared DEFAULT_CROSS_BRANCH_MODE constant + config→engine wiring test.
-- [M2.5b] Plural cross-branch holders in the warning shape (after M3.2 consumer exists).
-- [M3.2] Surface `branch` in the check_lock tool output.
-- [product] Decide: should branchless (non-git) vs branched be a cross-branch conflict?
+- [M2.5b, after M3.2] Plural cross-branch holders in the warning shape (consumer now exists post-M3.2).
+- [M3.2/M3.3] Surface `branch` in the check_lock tool output.
+- [product → GitHub issue] Branchless (non-git) vs branched: should it be a cross-branch conflict?
+- [backlog] Real-git-repo test (named branch resolves) + live stdio-transport registration test (M3.2 issue #3).
+- [ADR] ADR-004: simple-git over manual git shelling / isomorphic-git.
