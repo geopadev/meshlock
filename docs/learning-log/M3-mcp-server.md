@@ -136,3 +136,47 @@ A: since the wiring seeds a main and the branch resolve to null there is a misma
 What an await inside BEGIN IMMEDIATE actually costs — the held write lock blocking other connections for the git subprocess's duration (Q1, partial)
 Why config is injected once rather than loaded per call — async disk read, consistent snapshot, testability (Q4)
 What proves the config value reached the engine — the outcome tracking the config (block vs warn), not the presence of an error (Q5, partial)
+
+---
+
+## M3.2b — release_lock tool (2026-06-22)
+
+**Built:** The counterpart to acquire_lock: release_lock lets a session give back a lock it
+holds. Deliberately the simple tool — no git, no simple-git, no async branch resolution. The
+handler factory makeReleaseLockHandler(db, config) closes over the DB and config, reads
+config.session_id (release is ownership-scoped), and calls the engine's releaseLock. The
+engine deletes WHERE path = ? AND session_id = ? — no branch filter — so one release drops
+all of the session's locks on that path across every branch. The engine returns a boolean:
+true → "Released", false → "Nothing to release" (a harmless no-op, not an error). server.ts
+registers release_lock alongside check_lock and acquire_lock. 4 handler tests.
+
+**Why this design:** Release is intentionally branch-agnostic — the existing engine
+releaseLock already ignores branch, and "release everything I hold on this path" is the
+sensible default; selective per-branch release is a future backlog item, not this milestone.
+Releasing a lock you don't own returns false rather than throwing, so the tool reports it
+plainly instead of erroring — same no-op philosophy as the engine. The handler is synchronous
+(no git to await), the simplest tool in the set.
+
+**Concepts:** ownership-scoped delete (path + session_id), boolean result → two text outcomes,
+no-op vs error semantics, branch-agnostic delete, synchronous handler (contrast with
+acquire_lock's async), reusing an engine function unchanged through a thin adapter.
+
+**Interview Qs:**
+Q: release_lock is synchronous while acquire_lock is async. What is the single reason for that difference?
+A: because acquire lock has to wait for simple-git to run where release doesn't need the branch name so doesn't need to wait for anything. (Correct. acquire_lock awaits the git subprocess to resolve the branch; release has nothing to await, so it stays synchronous. Async is only for code that actually waits on something.)
+
+Q: The engine's releaseLock deletes WHERE path = ? AND session_id = ? with no branch clause. What is the user-visible consequence when a session holds the same path on two branches and calls release_lock once?
+A: it releases the lock of the path meaning it releases throughout all the branches, it becomes free for someone else to acquire throughout any branch. (Correct. No branch filter means every row for that (path, session) is deleted in one call — both branch locks go, and the path is free on every branch.)
+
+Q: Releasing a lock you don't own returns false and the tool says "Nothing to release" rather than throwing an error. Why is that the right behaviour, not a missed error case?
+A: because it is not an error it is an expected behaviour so we let it go through. (Correct. Releasing something you don't hold is an ordinary, expected event — returned as data (false), not an exception. Exceptions are reserved for things that shouldn't happen, like DB faults.)
+
+Q: The handler passes config.session_id into releaseLock. Why does release need the session id at all — what would go wrong if it deleted by path alone?
+A: because the session id tells us which row to delete to release the lock. (On the right track, but the key point is ownership: without session_id in the WHERE clause, a release by path alone would delete ANY session's lock on that path — one agent could free another agent's lock. The session_id scopes the delete so you can only release your own.)
+
+Q: release_lock reuses the engine's releaseLock unchanged — the tool is a thin adapter. What belongs in the tool layer versus the engine layer, and why keep lock logic out of the tool?
+A: in the tool layer we keep what the agent sees to search and call the tool, and the logic resides in the engine layer. (Correct. The tool owns the agent-facing surface — input schema, description, the wording of the reply. The engine owns how locks work — the SQL and the ownership rule. Keeping logic in the engine means it's tested once and every tool just adapts it; and the dependency only points mcp → core, never back.)
+
+**Still fuzzy:**
+
+Why deleting by path alone is unsafe — without session_id any agent could release any agent's lock; session_id scopes the delete to your own (Q4, partial)
