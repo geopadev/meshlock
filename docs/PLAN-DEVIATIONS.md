@@ -24,12 +24,10 @@ sub-number (anything not in v6) is marked **[architect-invented]**.
 ---
 
 ## M1 — Project setup
-
 **Plan says:** repo + tooling, `core/db.ts` (SQLite wrapper + migrations + `locks`
 table), `core/config.ts` (zod schema + reader/writer). One milestone.
 
 **We did:**
-
 - ✅ **M1 (as built):** project skeleton + `config.ts` + `config.test.ts` only.
   The DB layer was NOT built here despite the plan bundling it into M1.
 
@@ -39,12 +37,10 @@ the first sub-task of M2. The M1 learning log confirms only config + skeleton sh
 ---
 
 ## M2 — Core lock engine
-
 **Plan says:** `core/lock-engine.ts` (acquire/release/check/list/expireStale) with
 `BEGIN IMMEDIATE` race handling + full tests. One milestone. (DB layer assumed from M1.)
 
 **We did — split into three architect sub-tasks:**
-
 - ✅ **M2.1 [architect-invented]:** `core/db.ts` + `001_create_locks.sql` + `db.test.ts`.
   The DB layer the plan had placed in M1. WAL mode locked (decision D2). Dep: `better-sqlite3`.
 - ✅ **M2.2 [architect-invented]:** `core/lock-engine.ts` + `lock-engine.test.ts`.
@@ -60,8 +56,7 @@ returns (conflict as data, not exception); ISO-8601 string comparison for expiry
 
 ---
 
-## M2.5 — Branch-aware locking ✅ (was skipped, caught, built & accepted)
-
+## M2.5 — Branch-aware locking  ✅ (was skipped, caught, built & accepted)
 **Plan says:** insert between M2 and M3. Add `branch` column; change uniqueness from
 `UNIQUE(path)` → `UNIQUE(path, branch)`; `acquireLock` resolves git branch; cross-branch
 behavior via new `cross_branch_mode` config (`warn` default / `block` / `ignore`).
@@ -69,7 +64,7 @@ Dep: `simple-git`. Files: lock-engine.ts, lock-engine.test.ts, config.ts, new mi
 
 **What happened:** ⏭️ **SKIPPED.** We went M2 → straight to M3 (check_lock) without
 doing M2.5. Caught during the v6 plan re-read. M2.5 was a v4 insertion; the user
-conceived the branch-aware idea _after_ M3 had already started, so it wasn't in view
+conceived the branch-aware idea *after* M3 had already started, so it wasn't in view
 when M3 began.
 
 **Product rationale (user's, formalized):** cross-branch hard-blocking would make
@@ -84,7 +79,6 @@ would mean immediately rewriting it. `check_lock` (already built, read-only) get
 retrofitted into its response cheaply later.
 
 **Scope decisions (RESOLVED):**
-
 - D-M2.5-a: ✅ `002` rebuild migration (proper table-rebuild pattern, not amending `001`).
   `001` stays honest as "the schema at M2"; `002` demonstrates create-new/copy/drop/rename.
 - D-M2.5-b: ✅ branchless locks permissive — non-git-repo / detached HEAD stores NULL and
@@ -103,7 +97,6 @@ CODE not the constraint (the crucial test passed). M2 concurrency tests untouche
 stayed synchronous; no simple-git added.
 
 **Architect overrides on the build:**
-
 - Issue #1: agent kept `otherBranch: string | null` (not spec's `string`) — ACCEPTED, the
   type shouldn't lie; a branchless lock genuinely has null branch. OPEN PRODUCT QUESTION:
   should branchless (non-git) vs branched count as cross-branch conflict at all? Current
@@ -111,7 +104,6 @@ stayed synchronous; no simple-git added.
   Tracked in geopadev/meshlock#1 (deferred pending user feedback; warn default holds).
 
 **Follow-on items spawned by M2.5 (NOT done here):**
-
 - **[M3.2 wiring]** Double-default bug: engine `crossBranchMode` defaults to `"block"`,
   config `cross_branch_mode` defaults to `"warn"`. If wiring forgets to pass config →
   silent divergence (user set warn, gets block). FIX: single shared `DEFAULT_CROSS_BRANCH_MODE`
@@ -124,13 +116,11 @@ stayed synchronous; no simple-git added.
 ---
 
 ## M3 — MCP server + tools
-
 **Plan says:** ONE milestone delivering `mcp/server.ts` + all four tools
 (`acquire_lock`, `release_lock`, `check_lock`, `team_status`) + `meshlock init`
 registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON-RPC.
 
 **We did — split into architect sub-tasks (only first three done):**
-
 - ✅ **M3.1 [architect-invented]:** server skeleton + `check_lock` (read-only tool) only,
   over stdio. Files: server.ts, tools/check-lock.ts, server.test.ts. Dep: `@modelcontextprotocol/sdk`.
 - ✅ **M3.1b [architect-invented]:** refactor — centralize DB path (`getDatabasePath()` in
@@ -143,7 +133,11 @@ registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON
   and engine fallback. Config DI'd into handler factory, loaded once in server.ts. 41 tests.
   Files: acquire-lock.ts, acquire-lock.test.ts, config.ts, lock-engine.ts (constant swap only),
   server.ts. Dep: simple-git ^3.36.0.
-- 📋 **M3.2b [architect-invented]:** `release_lock` tool. NOT YET BUILT. Next.
+- ✅ **M3.2b [architect-invented]:** `release_lock` tool. Thin sync adapter over engine's
+  releaseLock — branch-agnostic (no branch filter → one release drops all the session's locks
+  on that path across branches), ownership-scoped (config.session_id in WHERE), no-op-not-error
+  on unowned/absent locks. No git, no new dep, engine unchanged. 45 tests. Full lock lifecycle
+  (check/acquire/release) now exists in the MCP layer.
 - 📋 **M3.2c [architect-invented]:** factor branch-resolution into ONE shared cached helper
   (core/git.ts or similar) used by both acquire & release. Fixes M3.2 issues #1 (resolve from
   daemon cwd / repo root, NOT dirname(path) per-file) + #2 (no per-call git subprocess; cache
@@ -161,8 +155,7 @@ correctly being held until M2.5 lands.
 
 ---
 
-## M3.5 — Change briefing (the differentiator) 📋
-
+## M3.5 — Change briefing (the differentiator)  📋
 **Plan says:** insert between M3 and M4. New `core/changelog.ts` + `file_changelog`
 migration; record diff summary on release; enrich `acquire_lock` response with recent
 change history. Solo only (cross-machine is M8). Files: changelog.ts, changelog.test.ts,
@@ -173,7 +166,6 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 ---
 
 ## M4–M10 — not yet reached
-
 - 📋 **M4** Watcher daemon (chokidar) + `daemon/index.ts`
 - 📋 **M5** Git pre-commit hook
 - 📋 **M6** CLI + run wrapper
@@ -186,23 +178,27 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M3.2 accepted → 📋 **M3.2b next** (`release_lock` tool), then
-M3.2c (shared cached branch helper), then M3.3 (team_status + init), then M3.5 (change briefing).
+**Active milestone:** ✅ M3.2b accepted → 📋 **M3.2c next** (shared cached branch helper),
+then M3.3 (team_status + init + live registration test), then M3.5 (change briefing).
 
 **Built & reviewed so far:** M1 (config), M2.1 (db), M2.2 (lock engine),
-M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock).
+M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock),
+M3.2b (release_lock). Full check/acquire/release lifecycle live in the MCP layer.
 
 **Pending teaching:** Block 6 (NULL three-valued logic, undefined-vs-null, z.infer) proposed
 but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compound.
 
 **Backlog items captured (not lost):**
-
 - Ensure `data/migrations` ships in the published npm tarball (`files` field) — packaging risk.
 - Read-only DB open path (fail-if-missing) for when the first read-only caller appears.
 - Optional explicit `busy_timeout` pragma in db.ts (currently relying on better-sqlite3 default 5s).
 - Note near the ISO-8601 expiry comparison that all timestamps must share format (UTC Z, ms precision).
 - [M2.5b, after M3.2] Plural cross-branch holders in the warning shape (consumer now exists post-M3.2).
 - [M3.2/M3.3] Surface `branch` in the check_lock tool output.
-- [product] Branchless (non-git) vs branched cross-branch conflict — tracked in geopadev/meshlock#1
 - [backlog] Real-git-repo test (named branch resolves) + live stdio-transport registration test (M3.2 issue #3).
 - [ADR] ADR-004: simple-git over manual git shelling / isomorphic-git.
+- [M3.3 verification] Live registration test covers all 3 tools over real transport (M3.2b issue #2). Optional cheap version: SDK in-memory transport, tools/list asserts 3 tool names.
+- [M4 daemon-lifecycle] Guarantee session_id stability across a daemon run; decide regeneration policy (M3.2b issue #3). TTL is the safety net meanwhile.
+
+> Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
+> conflict / issue #1) live in BACKLOG.md, not here. This file tracks build-sequence follow-ons only.
