@@ -101,7 +101,7 @@ stayed synchronous; no simple-git added.
   type shouldn't lie; a branchless lock genuinely has null branch. OPEN PRODUCT QUESTION:
   should branchless (non-git) vs branched count as cross-branch conflict at all? Current
   code: yes, warns. Architect lean: yes (branchless = no git isolation = more concerning).
-  User to decide.
+  Tracked in geopadev/meshlock#1 (deferred pending user feedback; warn default holds).
 
 **Follow-on items spawned by M2.5 (NOT done here):**
 - **[M3.2 wiring]** Double-default bug: engine `crossBranchMode` defaults to `"block"`,
@@ -190,6 +190,6 @@ but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compoun
 - Note near the ISO-8601 expiry comparison that all timestamps must share format (UTC Z, ms precision).
 - [M2.5b, after M3.2] Plural cross-branch holders in the warning shape (consumer now exists post-M3.2).
 - [M3.2/M3.3] Surface `branch` in the check_lock tool output.
-- [product → GitHub issue] Branchless (non-git) vs branched: should it be a cross-branch conflict?
+- [product] Branchless (non-git) vs branched cross-branch conflict — tracked in geopadev/meshlock#1
 - [backlog] Real-git-repo test (named branch resolves) + live stdio-transport registration test (M3.2 issue #3).
 - [ADR] ADR-004: simple-git over manual git shelling / isomorphic-git.
