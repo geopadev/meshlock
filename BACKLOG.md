@@ -25,3 +25,11 @@
 - hover=summary, click=full briefing panel
 
 ## Naming: avoid "handoff"/"context lock" — candidate "change briefing"
+
+## Lock lifecycle refinements (deferred during M3.2 / M3.2b)
+- Selective per-branch release_lock — currently release is all-or-nothing per
+  path (drops all the session's locks on that path across branches). Revisit
+  whether an agent should be able to release just one branch's lock.
+- Branchless (non-git / disconnected-checkout) vs branched: should it count as
+  a cross-branch conflict? Currently yes (warn default). Tracked in
+  geopadev/meshlock#1 — needs real user feedback before changing.
