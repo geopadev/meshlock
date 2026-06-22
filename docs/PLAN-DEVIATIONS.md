@@ -138,12 +138,16 @@ registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON
   on that path across branches), ownership-scoped (config.session_id in WHERE), no-op-not-error
   on unowned/absent locks. No git, no new dep, engine unchanged. 45 tests. Full lock lifecycle
   (check/acquire/release) now exists in the MCP layer.
-- 📋 **M3.2c [architect-invented]:** factor branch-resolution into ONE shared cached helper
-  (core/git.ts or similar) used by both acquire & release. Fixes M3.2 issues #1 (resolve from
-  daemon cwd / repo root, NOT dirname(path) per-file) + #2 (no per-call git subprocess; cache
-  per-repo or resolve once per session). Built AFTER release_lock so the helper serves both.
-- 📋 **M3.3 [architect-invented]:** `team_status` tool + `meshlock init` registration.
-  NOT YET BUILT.
+- ✅ **M3.2c [architect-invented]:** `core/git.ts` — pure cached branch resolver. getCurrentBranch(cwd?)
+  defaults to process.cwd() (daemon repo root), maps detached/empty/error → null, never throws,
+  caches per-cwd for 5s (BRANCH_CACHE_TTL_MS) so a burst of calls = ≤1 subprocess/window. acquire-lock
+  now calls it (dropped inline resolveBranch + dirname(path)). Fixes M3.2 #1 (resolution base) + #2
+  (subprocess per call). git.test.ts uses real temp git repos → closes the named-branch coverage gap.
+  acquire-lock.test.ts: assertions unchanged, chdir-to-non-git-tempdir in setup (disclosed). 49 tests.
+  core/git.ts imports nothing from mcp/ — dependency direction intact.
+- 📋 **M3.3 [architect-invented]:** `team_status` tool + `meshlock init` registration. NOT YET BUILT.
+  team_status will consume getCurrentBranch. Live registration test (M3.2/b/c issue #3) gets solved
+  here — registering in Claude Code + watching real JSON-RPC IS the live test.
 
 **Why split:** four tools + init registration far exceeds the 6-file cap and mixes concerns;
 `check_lock` first (read-only) de-risks the transport/registration plumbing before any
@@ -178,12 +182,13 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M3.2b accepted → 📋 **M3.2c next** (shared cached branch helper),
-then M3.3 (team_status + init + live registration test), then M3.5 (change briefing).
+**Active milestone:** ✅ M3.2c accepted → 📋 **M3.3 next** (team_status + meshlock init +
+the live-agent-over-JSON-RPC payoff). team_status consumes core/git.ts's getCurrentBranch.
 
 **Built & reviewed so far:** M1 (config), M2.1 (db), M2.2 (lock engine),
 M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock),
-M3.2b (release_lock). Full check/acquire/release lifecycle live in the MCP layer.
+M3.2b (release_lock), M3.2c (core/git.ts cached branch resolver). Full check/acquire/release
+lifecycle live; branch resolution centralized + cached.
 
 **Pending teaching:** Block 6 (NULL three-valued logic, undefined-vs-null, z.infer) proposed
 but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compound.
@@ -199,6 +204,8 @@ but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compoun
 - [ADR] ADR-004: simple-git over manual git shelling / isomorphic-git.
 - [M3.3 verification] Live registration test covers all 3 tools over real transport (M3.2b issue #2). Optional cheap version: SDK in-memory transport, tools/list asserts 3 tool names.
 - [M4 daemon-lifecycle] Guarantee session_id stability across a daemon run; decide regeneration policy (M3.2b issue #3). TTL is the safety net meanwhile.
+- [M5 enhancement] Git hook busts the branch cache on checkout (event-driven invalidation; replaces TTL-guessing for the common case). 5s TTL stays as fallback. (M3.2c issue #1)
+- [conditional] If vitest pool changes forks→threads, chdir in acquire tests breaks; replace with a cwd seam on the handler (pass cwd in rather than reading process.cwd() globally). (M3.2c issue #2)
 
 > Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
 > conflict / issue #1) live in BACKLOG.md, not here. This file tracks build-sequence follow-ons only.
