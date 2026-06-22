@@ -24,10 +24,12 @@ sub-number (anything not in v6) is marked **[architect-invented]**.
 ---
 
 ## M1 — Project setup
+
 **Plan says:** repo + tooling, `core/db.ts` (SQLite wrapper + migrations + `locks`
 table), `core/config.ts` (zod schema + reader/writer). One milestone.
 
 **We did:**
+
 - ✅ **M1 (as built):** project skeleton + `config.ts` + `config.test.ts` only.
   The DB layer was NOT built here despite the plan bundling it into M1.
 
@@ -37,10 +39,12 @@ the first sub-task of M2. The M1 learning log confirms only config + skeleton sh
 ---
 
 ## M2 — Core lock engine
+
 **Plan says:** `core/lock-engine.ts` (acquire/release/check/list/expireStale) with
 `BEGIN IMMEDIATE` race handling + full tests. One milestone. (DB layer assumed from M1.)
 
 **We did — split into three architect sub-tasks:**
+
 - ✅ **M2.1 [architect-invented]:** `core/db.ts` + `001_create_locks.sql` + `db.test.ts`.
   The DB layer the plan had placed in M1. WAL mode locked (decision D2). Dep: `better-sqlite3`.
 - ✅ **M2.2 [architect-invented]:** `core/lock-engine.ts` + `lock-engine.test.ts`.
@@ -56,7 +60,8 @@ returns (conflict as data, not exception); ISO-8601 string comparison for expiry
 
 ---
 
-## M2.5 — Branch-aware locking  ✅ (was skipped, caught, built & accepted)
+## M2.5 — Branch-aware locking ✅ (was skipped, caught, built & accepted)
+
 **Plan says:** insert between M2 and M3. Add `branch` column; change uniqueness from
 `UNIQUE(path)` → `UNIQUE(path, branch)`; `acquireLock` resolves git branch; cross-branch
 behavior via new `cross_branch_mode` config (`warn` default / `block` / `ignore`).
@@ -64,7 +69,7 @@ Dep: `simple-git`. Files: lock-engine.ts, lock-engine.test.ts, config.ts, new mi
 
 **What happened:** ⏭️ **SKIPPED.** We went M2 → straight to M3 (check_lock) without
 doing M2.5. Caught during the v6 plan re-read. M2.5 was a v4 insertion; the user
-conceived the branch-aware idea *after* M3 had already started, so it wasn't in view
+conceived the branch-aware idea _after_ M3 had already started, so it wasn't in view
 when M3 began.
 
 **Product rationale (user's, formalized):** cross-branch hard-blocking would make
@@ -79,6 +84,7 @@ would mean immediately rewriting it. `check_lock` (already built, read-only) get
 retrofitted into its response cheaply later.
 
 **Scope decisions (RESOLVED):**
+
 - D-M2.5-a: ✅ `002` rebuild migration (proper table-rebuild pattern, not amending `001`).
   `001` stays honest as "the schema at M2"; `002` demonstrates create-new/copy/drop/rename.
 - D-M2.5-b: ✅ branchless locks permissive — non-git-repo / detached HEAD stores NULL and
@@ -97,6 +103,7 @@ CODE not the constraint (the crucial test passed). M2 concurrency tests untouche
 stayed synchronous; no simple-git added.
 
 **Architect overrides on the build:**
+
 - Issue #1: agent kept `otherBranch: string | null` (not spec's `string`) — ACCEPTED, the
   type shouldn't lie; a branchless lock genuinely has null branch. OPEN PRODUCT QUESTION:
   should branchless (non-git) vs branched count as cross-branch conflict at all? Current
@@ -104,6 +111,7 @@ stayed synchronous; no simple-git added.
   Tracked in geopadev/meshlock#1 (deferred pending user feedback; warn default holds).
 
 **Follow-on items spawned by M2.5 (NOT done here):**
+
 - **[M3.2 wiring]** Double-default bug: engine `crossBranchMode` defaults to `"block"`,
   config `cross_branch_mode` defaults to `"warn"`. If wiring forgets to pass config →
   silent divergence (user set warn, gets block). FIX: single shared `DEFAULT_CROSS_BRANCH_MODE`
@@ -116,11 +124,13 @@ stayed synchronous; no simple-git added.
 ---
 
 ## M3 — MCP server + tools
+
 **Plan says:** ONE milestone delivering `mcp/server.ts` + all four tools
 (`acquire_lock`, `release_lock`, `check_lock`, `team_status`) + `meshlock init`
 registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON-RPC.
 
 **We did — split into architect sub-tasks (only first three done):**
+
 - ✅ **M3.1 [architect-invented]:** server skeleton + `check_lock` (read-only tool) only,
   over stdio. Files: server.ts, tools/check-lock.ts, server.test.ts. Dep: `@modelcontextprotocol/sdk`.
 - ✅ **M3.1b [architect-invented]:** refactor — centralize DB path (`getDatabasePath()` in
@@ -151,7 +161,8 @@ correctly being held until M2.5 lands.
 
 ---
 
-## M3.5 — Change briefing (the differentiator)  📋
+## M3.5 — Change briefing (the differentiator) 📋
+
 **Plan says:** insert between M3 and M4. New `core/changelog.ts` + `file_changelog`
 migration; record diff summary on release; enrich `acquire_lock` response with recent
 change history. Solo only (cross-machine is M8). Files: changelog.ts, changelog.test.ts,
@@ -162,6 +173,7 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 ---
 
 ## M4–M10 — not yet reached
+
 - 📋 **M4** Watcher daemon (chokidar) + `daemon/index.ts`
 - 📋 **M5** Git pre-commit hook
 - 📋 **M6** CLI + run wrapper
@@ -184,6 +196,7 @@ M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (
 but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compound.
 
 **Backlog items captured (not lost):**
+
 - Ensure `data/migrations` ships in the published npm tarball (`files` field) — packaging risk.
 - Read-only DB open path (fail-if-missing) for when the first read-only caller appears.
 - Optional explicit `busy_timeout` pragma in db.ts (currently relying on better-sqlite3 default 5s).
