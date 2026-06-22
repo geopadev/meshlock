@@ -227,6 +227,130 @@ describe("expireStaleLocks", () => {
   });
 });
 
+describe("acquireLock — branch dimension", () => {
+  it("same branch, different session → still hard-blocks", () => {
+    const a = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+    expect(a.ok).toBe(true);
+
+    const b = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+    expect(b).toEqual({ ok: false, reason: "held", heldBy: SESSION_A });
+    expect(rowCount(db, "/repo/file.ts")).toBe(1);
+  });
+
+  it("cross-branch with crossBranchMode 'warn' → succeeds AND carries a warning", () => {
+    acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+
+    const b = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "feature",
+      crossBranchMode: "warn",
+    });
+
+    expect(b.ok).toBe(true);
+    if (b.ok) {
+      expect(b.warning).toEqual({
+        reason: "cross_branch",
+        otherBranch: "main",
+        heldBy: SESSION_A,
+      });
+    }
+    // Both locks coexist: one per branch.
+    expect(rowCount(db, "/repo/file.ts")).toBe(2);
+  });
+
+  it("cross-branch with crossBranchMode 'block' → hard conflict", () => {
+    acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+
+    const b = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "feature",
+      crossBranchMode: "block",
+    });
+
+    expect(b).toEqual({ ok: false, reason: "held", heldBy: SESSION_A });
+    // B never wrote its row.
+    expect(rowCount(db, "/repo/file.ts")).toBe(1);
+  });
+
+  it("cross-branch with crossBranchMode 'ignore' → succeeds, no warning", () => {
+    acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+
+    const b = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "feature",
+      crossBranchMode: "ignore",
+    });
+
+    expect(b.ok).toBe(true);
+    if (b.ok) expect(b.warning).toBeUndefined();
+    expect(rowCount(db, "/repo/file.ts")).toBe(2);
+  });
+
+  it("two branchless (null) locks on the same path, different sessions → still block", () => {
+    // This is the crucial one: UNIQUE(path, branch) will NOT stop two (path,
+    // NULL) rows because SQL treats NULL != NULL. The block here is enforced by
+    // the engine's selectSame check, not by the database constraint.
+    const a = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: null,
+    });
+    expect(a.ok).toBe(true);
+
+    const b = acquireLock(db, {
+      path: "/repo/file.ts",
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: null,
+    });
+    expect(b).toEqual({ ok: false, reason: "held", heldBy: SESSION_A });
+    // Proof the constraint did not silently allow a second branchless row.
+    expect(rowCount(db, "/repo/file.ts")).toBe(1);
+  });
+});
+
 describe("concurrency — two connections to the same DB file", () => {
   it("contends at BEGIN IMMEDIATE: while one holds the write lock the other cannot begin", () => {
     // Two independent connections to the same file.

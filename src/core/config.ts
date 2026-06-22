@@ -11,6 +11,7 @@ export const ConfigSchema = z.object({
   lock_timeout: z.number().int().min(60).max(7200),
   lock_mode: z.enum(["exclusive", "advisory"]),
   granularity: z.enum(["file", "directory"]),
+  cross_branch_mode: z.enum(["warn", "block", "ignore"]),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
@@ -31,6 +32,7 @@ export function defaultConfig(): Config {
     lock_timeout: 1800,
     lock_mode: "exclusive",
     granularity: "file",
+    cross_branch_mode: "warn",
   };
 }
 
