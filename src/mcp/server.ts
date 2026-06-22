@@ -1,16 +1,28 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { openDatabase, type MeshLockDatabase } from "../core/db.js";
-import { getDatabasePath } from "../core/config.js";
+import { getDatabasePath, loadConfig, type Config } from "../core/config.js";
 import { checkLockToolConfig, makeCheckLockHandler } from "./tools/check-lock.js";
+import {
+  acquireLockToolConfig,
+  makeAcquireLockHandler,
+} from "./tools/acquire-lock.js";
 
-/** Create the MCP server and register MeshLock's tools against `db`. */
-export function createServer(db: MeshLockDatabase): McpServer {
+/**
+ * Create the MCP server and register MeshLock's tools against `db`. `config`
+ * supplies the session identity and lock policy that mutating tools need.
+ */
+export function createServer(db: MeshLockDatabase, config: Config): McpServer {
   const server = new McpServer({ name: "meshlock", version: "0.1.0" });
   server.registerTool(
     "check_lock",
     checkLockToolConfig,
     makeCheckLockHandler(db)
+  );
+  server.registerTool(
+    "acquire_lock",
+    acquireLockToolConfig,
+    makeAcquireLockHandler(db, config)
   );
   return server;
 }
@@ -24,7 +36,8 @@ export function createServer(db: MeshLockDatabase): McpServer {
  */
 async function main(): Promise<void> {
   const db = openDatabase(getDatabasePath());
-  const server = createServer(db);
+  const config = await loadConfig();
+  const server = createServer(db, config);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Boot diagnostic on stderr only — stdout stays reserved for the protocol.
