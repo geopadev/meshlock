@@ -88,3 +88,51 @@ Why getDatabasePath() matters — the "single source of truth" argument for avoi
 What noUnusedLocals does and why TypeScript treats unused imports as errors in strict mode (Q3)
 What dirname(getDatabasePath()) === dirname(getConfigPath()) is actually asserting — same parent folder, not same full path (Q4)
 Why side effects in low-level functions are risky — invisible to callers, can fire in unexpected contexts (Q5)
+
+---
+
+## M3.2 — acquire_lock tool (+ simple-git, + shared cross-branch default) (2026-06-22)
+
+**Built:** The first mutating MCP tool, acquire_lock. It takes only a path; the tool
+resolves the current git branch itself with simple-git (new dependency), falling back to
+null when there is no repo / detached HEAD / any git error — so git is never a hard
+requirement. The handler factory makeAcquireLockHandler(db, config) closes over the DB and
+the loaded config, reads session_id / lock_mode / lock_timeout / cross_branch_mode from
+config, and calls the synchronous acquireLock engine. server.ts now loads config once and
+registers acquire_lock alongside check_lock. The M2.5 double-default bug is fixed: a single
+exported DEFAULT_CROSS_BRANCH_MODE constant in config.ts is used both by defaultConfig() and
+by the engine's fallback, so they can't diverge. 5 handler tests.
+
+**Why this design:** Branch resolution is async git I/O; it happens in the handler BEFORE
+the engine call, so nothing async ever enters the BEGIN IMMEDIATE transaction (the engine
+stays synchronous and pure). The tool catches every git failure and treats it as a null
+branch rather than surfacing an error — MeshLock works outside git. Config is injected into
+the factory (same DI discipline as the DB handle) so the handler never re-reads config per
+call. The shared default constant removes the two-copies-of-one-fact bug from M2.5.
+
+**Concepts:** async tool handlers (Promise<CallToolResult>), simple-git revparse, try/catch
+fallback to a sentinel (null) instead of throwing, dependency injection of config, shared
+constant as single source of truth, value-vs-type imports (import { x, type Y }), dependency
+direction (mcp may import core; core must never import mcp).
+
+**Interview Qs:**
+Q: Why does branch resolution happen in the handler (async) and not inside acquireLock? What rule about the BEGIN IMMEDIATE transaction would be broken otherwise?
+A: so the whole process remains synchronized instead of turning everything async and creating other issues. (Right instinct — keep the engine synchronous. The specific cost: an await inside BEGIN IMMEDIATE would hold the RESERVED write lock on the SQLite file for the whole unpredictable duration of the git subprocess, blocking every other connection. better-sqlite3 is synchronous by design, so you resolve the branch first, then make the sync engine call.)
+
+Q: resolveBranch wraps simple-git in try/catch and returns null on any failure. Why is "no git" treated as a branchless lock rather than an error the tool reports? What did M2.5 decide about null branches?
+A: It stays like that so the user can still use the tool without having git or being in a repo. (Correct. Git is not a hard requirement; M2.5 decided null means "no branch / not a git repo" and the engine treats all nulls as one shared logical branch, so a null branch flows through normally instead of erroring.)
+
+Q: M2.5 left config defaulting cross_branch_mode to "warn" but the engine defaulting to "block". How does a single exported DEFAULT_CROSS_BRANCH_MODE constant make it impossible for the two to disagree?
+A: because the source of truth they have is the same coming from the config, when that source of truth changes back to block, both use block. (Correct. One exported constant, imported by both defaultConfig() and the engine fallback. Change it once and both change together — there is no second copy to forget.)
+
+Q: makeAcquireLockHandler takes (db, config). Why pass config into the factory instead of calling loadConfig() inside the handler on each call?
+A: I am not sure. (loadConfig() is async and reads + parses the file from disk; doing it per call would add a disk read on every acquire and force the handler to be async just for that. Injecting it once at boot captures a single consistent snapshot, keeps git the handler's only async dependency, and — same as the DB handle — lets tests pass a fake config without writing a file.)
+
+Q: The config-wiring test seeds a "main" lock by another session, then calls the tool (which resolves branch=null). Explain how that one setup produces a CROSS-branch conflict, and why it proves the config value actually reaches the engine.
+A: since the wiring seeds a main and the branch resolve to null there is a mismatch resulting in a conflict, we know it reaches it because of the error? (Mostly right on the mismatch: null vs "main" is a different branch held by another session = cross-branch. But whether that becomes a block or a warning is decided by config.cross_branch_mode. The proof isn't "an error" — it's that the OUTCOME tracks the config: same setup, config "block" → conflict text, config "warn" → acquired + warning. The outcome changing with the config value is what proves the value reached the engine.)
+
+**Still fuzzy:**
+
+What an await inside BEGIN IMMEDIATE actually costs — the held write lock blocking other connections for the git subprocess's duration (Q1, partial)
+Why config is injected once rather than loaded per call — async disk read, consistent snapshot, testability (Q4)
+What proves the config value reached the engine — the outcome tracking the config (block vs warn), not the presence of an error (Q5, partial)
