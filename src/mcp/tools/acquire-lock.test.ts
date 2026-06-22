@@ -5,7 +5,13 @@ import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
 import { acquireLock, type CrossBranchMode } from "../../core/lock-engine.js";
 import type { Config } from "../../core/config.js";
+import { clearBranchCache } from "../../core/git.js";
 import { makeAcquireLockHandler } from "./acquire-lock.js";
+
+// The tool now resolves the branch from process.cwd(). We chdir into a non-git
+// temp dir for each test so that resolution falls back to null deterministically
+// (vitest itself runs inside the meshlock git repo). Restored in afterEach.
+const ORIGINAL_CWD = process.cwd();
 
 let tempDir: string;
 let db: MeshLockDatabase;
@@ -53,13 +59,17 @@ function branchOf(path: string): string | null {
 }
 
 beforeEach(async () => {
-  // A temp dir under the OS tmp root: it exists but is NOT a git repo, so the
-  // tool's branch resolution naturally falls back to null.
+  // A temp dir under the OS tmp root: it exists but is NOT a git repo. We chdir
+  // into it so the tool's branch resolution (process.cwd()) falls back to null.
   tempDir = await mkdtemp(join(tmpdir(), "meshlock-acquire-test-"));
   db = openDatabase(join(tempDir, "test.db"));
+  process.chdir(tempDir);
+  clearBranchCache();
 });
 
 afterEach(async () => {
+  // Restore cwd before removing the temp dir we were sitting in.
+  process.chdir(ORIGINAL_CWD);
   db.close();
   await rm(tempDir, { recursive: true, force: true });
 });
@@ -77,8 +87,8 @@ describe("acquire_lock handler", () => {
   });
 
   it("falls back to a branchless lock when there is no git repo (does not throw)", async () => {
-    // dirname(path) is the temp dir, which is not a git repo, so resolveBranch
-    // returns null — proving git is not a hard requirement.
+    // cwd is the non-git temp dir, so branch resolution returns null —
+    // proving git is not a hard requirement.
     const path = join(tempDir, "nogit.ts");
     const handler = makeAcquireLockHandler(db, makeConfig());
 
