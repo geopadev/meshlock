@@ -7,6 +7,10 @@ import {
   acquireLockToolConfig,
   makeAcquireLockHandler,
 } from "./tools/acquire-lock.js";
+import {
+  releaseLockToolConfig,
+  makeReleaseLockHandler,
+} from "./tools/release-lock.js";
 
 /**
  * Create the MCP server and register MeshLock's tools against `db`. `config`
@@ -23,6 +27,11 @@ export function createServer(db: MeshLockDatabase, config: Config): McpServer {
     "acquire_lock",
     acquireLockToolConfig,
     makeAcquireLockHandler(db, config)
+  );
+  server.registerTool(
+    "release_lock",
+    releaseLockToolConfig,
+    makeReleaseLockHandler(db, config)
   );
   return server;
 }
