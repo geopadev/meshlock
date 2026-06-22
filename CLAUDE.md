@@ -8,6 +8,8 @@ One concern per prompt. If in doubt, smaller is correct.
 - ONE concern per prompt. >6 files or mixed concerns → STOP and say so.
 - NEVER run git add, commit, or push. Human commits.
 - NO drive-by refactors. Note problems, don't fix them.
+- NEVER create GitHub issues, PRs, or releases. Surface problems in your
+  output as "ISSUE:" lines; the human triages them.
 - NO new dependencies without flagging: what, why, alternatives.
 - Strict TypeScript. No `any`. No `@ts-ignore`.
 - Every new module gets a vitest test. Run `pnpm test` before done.
@@ -20,6 +22,9 @@ One concern per prompt. If in doubt, smaller is correct.
 1. Files changed and what changed
 2. Plain-English walkthrough: what and WHY
 3. One thing that could break and how we'd notice
+4. Problems noticed but NOT fixed (outside scope): list each as a
+   one-line "ISSUE: <description>" so the human can decide whether to
+   open a GitHub issue. Do NOT create issues yourself.
 
 ## Commit messages
 feat(lock-engine): add advisory lock mode
