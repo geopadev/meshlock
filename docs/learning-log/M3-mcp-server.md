@@ -180,3 +180,58 @@ A: in the tool layer we keep what the agent sees to search and call the tool, an
 **Still fuzzy:**
 
 Why deleting by path alone is unsafe — without session_id any agent could release any agent's lock; session_id scopes the delete to your own (Q4, partial)
+
+---
+
+## M3.2c — shared cached branch resolver (core/git.ts) (2026-06-23)
+
+**Built:** A focused refactor. Branch resolution moved out of acquire-lock.ts into a new pure
+utility, core/git.ts, exporting getCurrentBranch(cwd?) — resolves the repo's branch via
+simple-git, maps detached/empty/error to null, and caches the result per cwd for a short TTL
+(BRANCH_CACHE_TTL_MS = 5000) so repeated tool calls spawn at most one git subprocess per
+window. Also exports clearBranchCache() for tests. acquire-lock.ts now calls getCurrentBranch()
+with no argument (defaulting to process.cwd() — the daemon's repo) instead of resolving from
+dirname(path). This fixes two M3.2 issues: wrong resolution base (#1) and a subprocess per call
+(#2). git.test.ts uses real temp git repos (init + commit + checkout) so the named-branch path
+is genuinely exercised, closing the M3.2 coverage gap; it also tests the cache hit and the
+re-resolve after clearBranchCache. No engine, config, or schema changes.
+
+**Why this design:** A git branch is a property of the whole repository (one HEAD), not of a
+file's directory — so resolving from process.cwd() (the repo root the daemon runs in) is
+correct, where dirname(path) was not. The short-TTL cache bounds both cost (one git call per
+window) and staleness (a checkout is picked up within the TTL) — a deliberate tradeoff. core/git.ts
+is a pure utility: it imports neither config, the DB, nor anything from mcp/, so the dependency
+direction stays inward.
+
+**What changed in the acquire test (cwd note):** acquire_lock now resolves from process.cwd(),
+and vitest runs inside the meshlock git repo — so without intervention the branchless tests
+would resolve meshlock's real branch instead of null. Rather than rewrite assertions, the test
+chdir()s into the non-git temp dir in beforeEach (restoring cwd in afterEach), so resolution
+falls back to null exactly as before. Every existing assertion is unchanged; only setup/teardown
+and two comments were touched.
+
+**Concepts:** module-level cache with TTL (cost vs staleness tradeoff), cache keyed by input
+(cwd), moving a utility into core/ for reuse + dependency direction, process.cwd() vs a file's
+dirname as the resolution base, process.chdir in tests (works under vitest's forks pool),
+clearing module-level state between tests.
+
+**Interview Qs:**
+Q: Why resolve the branch from process.cwd() (the repo) instead of dirname(path) (the locked file's directory)? What was actually wrong with the old base?
+A: because the root is supposed to be from the daemons current directory, not the path of each file independently. (Correct. A branch is a property of the whole repository — one HEAD — not of any individual file's directory, so the repo root (the daemon's cwd) is the right base. dirname(path) could also point somewhere that resolves the wrong repo or null.)
+
+Q: The cache has a 5-second TTL. Describe the two things that TTL is balancing — what gets worse if it were 0ms, and what gets worse if it were 1 hour?
+A: it balances staleness and slowness at 0 ms slowness and at 1 hour staleness. (Correct. 0ms → a git subprocess on every call (slow); 1 hour → a branch switch wouldn't be noticed for an hour (stale). 5s is the middle ground.)
+
+Q: The cache is a Map keyed by cwd, not a single variable. Why key by cwd at all — when would a single shared cached value give a wrong answer?
+A: because when two different repos exist if it was just one variable one of the callers working on the repo that is not cached in the single variable will get the wrong reply. (Correct. With a single variable the second repo would receive the first repo's cached branch. Keying by cwd gives each repository its own entry — like memoizing by argument.)
+
+Q: core/git.ts is allowed to be imported by acquire-lock.ts (mcp), but core/git.ts must not import anything from mcp/. What is that rule called and why does it matter for a utility like this?
+A: because the mcp has to be the caller not the other way around. keeps the core a pure reusable foundation that the mcp depends on. (Right idea. The rule's name is dependency direction — dependencies point inward, toward core. It matters because it prevents import cycles and keeps core testable and reusable in isolation: M3.5 and M5 can reuse getCurrentBranch without pulling in the MCP server.)
+
+Q: The acquire test chdir()s into a non-git temp dir instead of changing the assertions. What would have made the tests non-deterministic if we had instead asserted against the branch process.cwd() resolves to?
+A: I don't know. (Asserting against the resolved branch would tie the test to whatever branch the meshlock repo happens to be on when the suite runs — "main" on your machine, a feature branch or detached HEAD in CI. That value changes by environment, so the test would pass in one place and fail in another. chdir into a known non-git dir makes the result always null regardless of where the suite runs — a hermetic test.)
+
+**Still fuzzy:**
+
+The name of the layering rule — "dependency direction" / dependencies point inward toward core (Q4, partial)
+Why asserting on the real resolved branch is non-deterministic — the value depends on the environment's current branch, so the test stops being hermetic (Q5)
