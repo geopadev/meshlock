@@ -133,3 +133,55 @@ Optional parameters and TypeScript's string | undefined narrowing — why the ch
 toEqual vs three toBe checks — toEqual catches extra or misnamed fields, three checks don't (Q3)
 Why test 1 (SQLITE_BUSY) is needed alongside test 2 — sequential calls would pass test 2 even without IMMEDIATE (Q4)
 Transaction leak mechanism — Q5 instinct was right but the file-lock-to-next-test chain wasn't fully articulated
+
+---
+
+## M2.5 — branch dimension on locks (2026-06-22)
+
+**Built:** Migration 002 rebuilds the locks table (SQLite table-rebuild pattern:
+create new, copy rows, drop old, rename) to add a nullable branch column and change
+identity from path PRIMARY KEY to UNIQUE(path, branch). config.ts gains a
+cross_branch_mode enum (warn/block/ignore, default warn). acquireLock now takes
+optional branch and crossBranchMode params and is branch-aware: same-branch other-session
+live lock hard-blocks (NULL == NULL via `branch IS ?`); cross-branch behaviour depends
+on the mode (block → conflict, warn → succeed + CrossBranchWarning, ignore → succeed
+silently). Writes use DELETE-then-INSERT instead of UPSERT. checkLock/listLocks now read
+branch. 6 new tests (1 config, 5 engine incl. the two-null-still-block case); db.test.ts
+updated for the new schema. No new dependency — branch resolution is the caller's job
+(simple-git lands in M3.2).
+
+**Why this design:** The engine stays pure and synchronous — it receives branch and
+crossBranchMode as parameters rather than reading config or calling git, so no async I/O
+enters the BEGIN IMMEDIATE transaction. `branch IS ?` is null-safe equality, the only way
+to make two branchless locks count as the same branch. UNIQUE(path, branch) cannot enforce
+the branchless rule (SQLite treats NULL as distinct), so the engine's same-branch check is
+what blocks two (path, NULL) rows — and DELETE-then-INSERT avoids the UPSERT bug where
+ON CONFLICT never fires for a NULL branch and silently duplicates rows.
+
+**Concepts:** SQLite table rebuild, NULL three-valued logic (NULL = NULL is unknown, not
+false), `IS` / `IS NOT` as null-safe comparison, UNIQUE constraint and NULL distinctness,
+optional params with ?? defaults, discriminated union with an optional extra field
+(warning?), z.infer widening forcing fixture updates, additive type changes.
+
+**Interview Qs:**
+Q: Why does `branch IS ?` work for matching a null branch when `branch = ?` would not? What does SQL evaluate NULL = NULL to?
+A: when IS > ? we tell it that it can be null, sql evaluates NULL = NULL to false. (Right that IS allows null-matching, but the key correction: NULL = NULL evaluates to NULL — "unknown" — not false. SQL has three-valued logic. In a WHERE clause an unknown result excludes the row, so it behaves false-ish, but the value itself is NULL. `IS` is the null-safe operator that returns true when both sides are NULL.)
+
+Q: UNIQUE(path, branch) is on the table, yet the engine still has code to block two branchless locks on the same path. Why doesn't the constraint handle that case on its own?
+A: I don't know. (Because SQLite treats two NULLs as distinct inside a UNIQUE index — NULL != NULL — so UNIQUE(path, branch) happily allows two (path, NULL) rows. The constraint can enforce "one lock per path per named branch" but not "one branchless lock per path." Only the engine's selectSame check enforces that.)
+
+Q: We switched from ON CONFLICT(path) DO UPDATE to DELETE-then-INSERT. What specific bug would the upsert have caused once branch could be null?
+A: It would keep creating new rows. (Correct. ON CONFLICT(path, branch) never fires for a NULL branch because NULL != NULL, so instead of updating the existing branchless row the upsert inserts a fresh duplicate every acquire. DELETE-then-INSERT guarantees exactly one (path, branch) row.)
+
+Q: branch?: string | null has both a ? and | null. What is the difference between the two kinds of "missing," and what does input.branch ?? null do with each?
+A: ? can either be null or not null and | is null. (Close but imprecise. ? means the property may be ABSENT — undefined, not passed at all. | null means it may be present but explicitly null. So there are two "absences": undefined (omitted) and null (deliberate). `?? null` collapses both undefined and null down to null, so the rest of the function only deals with one.)
+
+Q: Adding cross_branch_mode to the Zod schema caused TypeScript to flag several test files I hadn't otherwise changed. Why did that happen, and why is it a feature rather than an annoyance?
+A: I don't know. (Config is derived from the schema with z.infer, so adding a required field widened the Config type everywhere. Every place that builds a full Config — the test fixtures — was now missing a required property, which is a compile error. It's a feature: TypeScript audited every Config constructor for me, so I couldn't forget to update one. In plain JS the missing field would just be undefined and surface as a bug much later.)
+
+**Still fuzzy:**
+
+NULL three-valued logic — NULL = NULL is unknown (not false), and why IS / IS NOT are the null-safe comparisons (Q1)
+Why a UNIQUE constraint can't enforce uniqueness across NULLs — SQLite treats NULLs as distinct (Q2)
+The two kinds of "missing" in branch?: string | null — undefined (omitted) vs explicit null — and what ?? collapses (Q4)
+z.infer widening — why adding a schema field forces updates at every Config construction site, and why that's TypeScript doing your audit (Q5)
