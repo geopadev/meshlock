@@ -235,3 +235,52 @@ A: I don't know. (Asserting against the resolved branch would tie the test to wh
 
 The name of the layering rule — "dependency direction" / dependencies point inward toward core (Q4, partial)
 Why asserting on the real resolved branch is non-deterministic — the value depends on the environment's current branch, so the test stops being hermetic (Q5)
+
+---
+
+## M3.3a — team_status tool (2026-06-23)
+
+**Built:** The fourth and final tool of the M3 set, and the second read-only one. team_status
+takes no input and surveys every active lock: it reads listLocks(db) (all non-expired rows,
+ordered by path, branch included) and resolves the agent's own branch via getCurrentBranch(),
+then formats a compact text block — a header count plus one line per lock (path, branch or "no
+branch", holder, expiry). Locks whose branch matches the agent's current branch are marked
+" ← your branch", with null == null so a branchless agent matches branchless locks. The empty
+case returns "No active locks." The handler mutates nothing. server.ts registers it alongside
+the other three. 4 handler tests (empty, multi-lock listing, own-branch marking incl. null,
+expired excluded).
+
+**Why this design:** team_status is the survey counterpart to check_lock's point query: one
+asks "is THIS path locked?", the other asks "what is locked everywhere?". Being read-only it is
+the safest tool — it can never corrupt state, only report it. The own-branch marker is what
+makes a flat list actionable: it separates locks that directly contend with the agent's work
+(same branch) from those that merely coexist on other branches. It becomes team-wide for free:
+in team mode the relay writes the same locks table, so the same survey reflects the whole team
+without the tool changing at all. config is taken for signature consistency but unused today
+(marked with `void config`).
+
+**Concepts:** point query vs full survey, read-only as the safest operation, no-argument tool
+(empty Zod input shape), null == null branch comparison reused for own-branch marking, reusing
+two existing core functions (listLocks + getCurrentBranch) through a thin adapter, the same
+table powering solo and team mode, an intentionally-unused parameter (void config).
+
+**Interview Qs:**
+Q: check_lock and team_status are both read-only. What is the essential difference between what each answers, and why does team_status need no input while check_lock needs a path?
+A: because check_lock needs to check a specific lock not all of them so we need to specify which one aka. the path. (Correct. check_lock is a point query — it needs the path to look up one lock; team_status is a full survey, so there is nothing to specify.)
+
+Q: team_status is the safest of the four tools to expose. Why does "read-only" make it safe in a way acquire_lock and release_lock are not?
+A: because for team status it is only a select query, the only thing that it can get wrong is current branch name because of the ttl time, if the other two bug out they can delete the wrong rows and broadcast the wrong paths as not locked or locked. (Correct and precise. A SELECT can only mislabel what it displays — at worst the cached branch is stale. The mutating tools write/delete rows, so a bug there can corrupt who-holds-what, not merely misdisplay it.)
+
+Q: The own-branch marker uses lock.branch === currentBranch. Why does plain === give the correct answer for two branchless (null) locks, and how does that line up with the engine's branch rule?
+A: because in typescript if you strictly check null === null it outputs true, just like we use IS for sql NULL = NULL for it to return true instead of unknown. (Correct. JS/TS null === null is true, so two branchless values match — the same "two nulls are the same branch" rule the engine enforces in SQL with IS, just given for free by the language here.)
+
+Q: The plan says team_status "becomes team-wide without changing." What about the architecture makes that true — what does the relay do in team mode that the tool never has to know about?
+A: because the things it calls live higher in the engine, they already exist it just needs to call them. (On the right track about reuse, but the team-wide point is about the data: team_status reads the locks table. In team mode the relay writes other sessions' locks into that same table, so the survey reflects the whole team without the tool changing — it never knows where the rows came from. Note: the engine/core is the LOWER layer the tool calls down into, not "higher".)
+
+Q: The handler takes config but never reads it (we wrote `void config`). Why keep a parameter you don't use, and what does `void config` communicate to a future reader?
+A: It tells the compiler that we meant to leave it empty so it doesn't throw any error or crash. (Right on intent. We keep the parameter for signature consistency with the other tool factories and likely team-mode use; void config marks it as deliberately unused so neither the linter nor a future reader mistakes it for a forgotten wire-up.)
+
+**Still fuzzy:**
+
+Layer direction — core/the engine is the LOWER/inner layer the tool calls down into, not "higher" (Q4)
+Why team_status is team-wide for free — the relay writes other sessions' rows into the same locks table the tool already reads (Q4)
