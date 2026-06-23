@@ -17,11 +17,14 @@ export type CrossBranchMode = "warn" | "block" | "ignore";
 
 /**
  * One row of the `locks` table. Field names mirror the migration columns
- * exactly so the shape can be read straight out of better-sqlite3. `branch` is
- * nullable: NULL means "no branch / not a git repo", and the engine treats two
- * NULL branches as the same logical branch.
+ * exactly so the shape can be read straight out of better-sqlite3. `repo_root`
+ * scopes the lock to one repository (a non-null sentinel — see core/git.ts).
+ * `branch` is nullable: NULL means "no branch / not a git repo", and the engine
+ * treats two NULL branches as the same logical branch. Lock identity is the
+ * triple (repo_root, path, branch).
  */
 export interface Lock {
+  repo_root: string;
   path: string;
   session_id: string;
   mode: LockMode;
@@ -32,6 +35,11 @@ export interface Lock {
 
 /** Input to {@link acquireLock}. */
 export interface AcquireInput {
+  /**
+   * Repository the lock belongs to. REQUIRED (no default): forgetting it is a
+   * compile error, which is the type-level guard against cross-repo leaks.
+   */
+  repoRoot: string;
   path: string;
   sessionId: string;
   mode: LockMode;
@@ -66,6 +74,7 @@ export type AcquireResult =
 
 /** Input to {@link releaseLock}. */
 export interface ReleaseInput {
+  repoRoot: string;
   path: string;
   sessionId: string;
 }
@@ -102,44 +111,50 @@ export function acquireLock(
   db: MeshLockDatabase,
   input: AcquireInput
 ): AcquireResult {
-  const { path, sessionId, mode, timeoutSeconds } = input;
+  const { repoRoot, path, sessionId, mode, timeoutSeconds } = input;
   const branch = input.branch ?? null;
   const crossBranchMode = input.crossBranchMode ?? DEFAULT_CROSS_BRANCH_MODE;
 
+  // Every statement is scoped by repo_root FIRST: a lock's identity is the
+  // triple (repo_root, path, branch). repo_root is a non-null sentinel, so plain
+  // `=` is correct; branch keeps `IS` for null-safety.
+  //
   // `branch IS ?` is null-safe equality: with a NULL bind it becomes `branch IS
   // NULL`, with a string it behaves like `=`. This is why two branchless locks
   // count as the same logical branch even though SQL `=` would never match NULL.
-  const selectSame = db.prepare<[string, string | null], Lock>(
-    "SELECT path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE path = ? AND branch IS ?"
+  const selectSame = db.prepare<[string, string, string | null], Lock>(
+    "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"
   );
   // The mirror: `branch IS NOT ?` is null-safe inequality — a different branch,
-  // treating NULL as distinct from any name and from being absent on our side.
-  const selectCross = db.prepare<[string, string | null, string, string], Lock>(
-    `SELECT path, session_id, mode, acquired_at, expires_at, branch FROM locks
-     WHERE path = ? AND branch IS NOT ? AND session_id != ? AND expires_at > ?
+  // treating NULL as distinct from any name. Still scoped to this repo.
+  const selectCross = db.prepare<[string, string, string | null, string, string], Lock>(
+    `SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks
+     WHERE repo_root = ? AND path = ? AND branch IS NOT ? AND session_id != ? AND expires_at > ?
      ORDER BY branch`
   );
-  const deleteSame = db.prepare("DELETE FROM locks WHERE path = ? AND branch IS ?");
+  const deleteSame = db.prepare(
+    "DELETE FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"
+  );
   const insert = db.prepare(
-    `INSERT INTO locks (path, session_id, mode, acquired_at, expires_at, branch)
-     VALUES (@path, @session_id, @mode, @acquired_at, @expires_at, @branch)`
+    `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch)
+     VALUES (@repo_root, @path, @session_id, @mode, @acquired_at, @expires_at, @branch)`
   );
 
   const txn = db.transaction((): AcquireResult => {
     const now = nowIso();
 
-    // Same-branch conflict: a live lock on our (path, branch) held by another
-    // session is a hard block — unchanged M2 behavior, now branch-scoped.
-    const same = selectSame.get(path, branch);
+    // Same-branch conflict: a live lock on our (repo_root, path, branch) held by
+    // another session is a hard block — unchanged M2 behavior, now repo-scoped.
+    const same = selectSame.get(repoRoot, path, branch);
     if (same && same.expires_at > now && same.session_id !== sessionId) {
       return { ok: false, reason: "held", heldBy: same.session_id };
     }
 
-    // Cross-branch: the same path locked by another session on a different
-    // branch. The query already filters to live, other-session, other-branch
-    // rows; take the first (ordered by branch for determinism).
+    // Cross-branch: the same path in the same repo locked by another session on
+    // a different branch. The query already filters to live, other-session,
+    // other-branch rows; take the first (ordered by branch for determinism).
     let warning: CrossBranchWarning | undefined;
-    const otherBranchLock = selectCross.get(path, branch, sessionId, now);
+    const otherBranchLock = selectCross.get(repoRoot, path, branch, sessionId, now);
     if (otherBranchLock) {
       if (crossBranchMode === "block") {
         return { ok: false, reason: "held", heldBy: otherBranchLock.session_id };
@@ -154,13 +169,14 @@ export function acquireLock(
       // "ignore": proceed silently.
     }
 
-    // Write our lock. DELETE-then-INSERT rather than ON CONFLICT(path, branch):
-    // the UNIQUE(path, branch) index does NOT fire for NULL branches (SQL treats
-    // NULLs as distinct), so an upsert would silently insert a duplicate
-    // branchless row. Deleting the same-branch row first guarantees exactly one
-    // (path, branch) row whether we are creating, refreshing, or replacing an
-    // expired lock — and it never touches other branches' rows.
+    // Write our lock. DELETE-then-INSERT rather than ON CONFLICT: the
+    // UNIQUE(repo_root, path, branch) index does NOT fire for NULL branches (SQL
+    // treats NULLs as distinct), so an upsert would silently insert a duplicate
+    // branchless row. Deleting the same (repo, path, branch) row first guarantees
+    // exactly one such row whether we are creating, refreshing, or replacing an
+    // expired lock — and it never touches other branches' or other repos' rows.
     const lock: Lock = {
+      repo_root: repoRoot,
       path,
       session_id: sessionId,
       mode,
@@ -168,7 +184,7 @@ export function acquireLock(
       expires_at: futureIso(timeoutSeconds),
       branch,
     };
-    deleteSame.run(path, branch);
+    deleteSame.run(repoRoot, path, branch);
     insert.run(lock);
     return warning ? { ok: true, lock, warning } : { ok: true, lock };
   });
@@ -178,29 +194,35 @@ export function acquireLock(
 }
 
 /**
- * Release the lock on `path`, but only if `sessionId` is the holder. Releasing
- * a lock you don't own (or one that doesn't exist) is a no-op, not an error.
+ * Release the lock on `path` in `repoRoot`, but only if `sessionId` is the
+ * holder. Releasing a lock you don't own (or one that doesn't exist) is a no-op,
+ * not an error. Branch-agnostic (no branch filter) but repo-scoped, so it drops
+ * all of the session's locks on that path within the one repo.
  *
  * @returns true if a row was actually deleted, false otherwise.
  */
 export function releaseLock(db: MeshLockDatabase, input: ReleaseInput): boolean {
   const result = db
-    .prepare("DELETE FROM locks WHERE path = ? AND session_id = ?")
-    .run(input.path, input.sessionId);
+    .prepare("DELETE FROM locks WHERE repo_root = ? AND path = ? AND session_id = ?")
+    .run(input.repoRoot, input.path, input.sessionId);
   return result.changes > 0;
 }
 
 /**
- * Report the current holder of `path`. A lock whose expires_at <= now counts
- * as free.
+ * Report the current holder of `path` within `repoRoot`. A lock whose
+ * expires_at <= now counts as free.
  */
-export function checkLock(db: MeshLockDatabase, path: string): CheckResult {
+export function checkLock(
+  db: MeshLockDatabase,
+  repoRoot: string,
+  path: string
+): CheckResult {
   const now = nowIso();
   const row = db
-    .prepare<[string], Lock>(
-      "SELECT path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE path = ?"
+    .prepare<[string, string], Lock>(
+      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE repo_root = ? AND path = ?"
     )
-    .get(path);
+    .get(repoRoot, path);
 
   if (!row || row.expires_at <= now) {
     return { held: false };
@@ -208,19 +230,23 @@ export function checkLock(db: MeshLockDatabase, path: string): CheckResult {
   return { held: true, lock: row };
 }
 
-/** Return all currently-held (non-expired) locks. */
-export function listLocks(db: MeshLockDatabase): Lock[] {
+/** Return all currently-held (non-expired) locks within `repoRoot`. */
+export function listLocks(db: MeshLockDatabase, repoRoot: string): Lock[] {
   const now = nowIso();
   return db
-    .prepare<[string], Lock>(
-      "SELECT path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE expires_at > ? ORDER BY path"
+    .prepare<[string, string], Lock>(
+      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE repo_root = ? AND expires_at > ? ORDER BY path"
     )
-    .all(now);
+    .all(repoRoot, now);
 }
 
 /**
  * Delete every lock whose expires_at <= now. Called explicitly by a caller
  * (e.g. on a sweep); it does not schedule itself.
+ *
+ * This is the ONE function that stays repo-agnostic: reaping dead rows is pure
+ * housekeeping, and an expired lock is garbage no matter which repo it belonged
+ * to, so there is no cross-repo-leak risk in deleting them all.
  *
  * @returns the number of stale rows removed.
  */

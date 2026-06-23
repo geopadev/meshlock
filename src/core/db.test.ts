@@ -38,6 +38,7 @@ describe("openDatabase", () => {
         "001_create_locks.sql",
         "002_add_branch_to_locks.sql",
         "003_add_repo_root_to_locks.sql",
+        "004_drop_repo_root_default.sql",
       ]);
       // Each applied_at should be a parseable ISO timestamp.
       for (const m of applied) {
@@ -48,15 +49,15 @@ describe("openDatabase", () => {
     }
   });
 
-  it("creates the locks table with the post-003 schema (repo_root column, three-way uniqueness)", () => {
+  it("creates the locks table with the post-004 schema (repo_root NOT NULL, no default, three-way uniqueness)", () => {
     const db = openDatabase(dbPath);
     try {
       const columns = db
         .prepare("PRAGMA table_info(locks)")
-        .all() as { name: string; notnull: number; pk: number }[];
+        .all() as { name: string; notnull: number; pk: number; dflt_value: string | null }[];
 
       const byName = new Map(columns.map((c) => [c.name, c]));
-      // `repo_root` is now present alongside the post-002 columns.
+      // `repo_root` is present alongside the post-002 columns.
       expect([...byName.keys()].sort()).toEqual([
         "acquired_at",
         "branch",
@@ -72,6 +73,9 @@ describe("openDatabase", () => {
       expect(byName.get("path")!.pk).toBe(0);
       // repo_root is a non-null sentinel; branch stays nullable; the rest NOT NULL.
       expect(byName.get("repo_root")!.notnull).toBe(1);
+      // 004 removed the S1a DEFAULT '(unknown)', so a missing repo_root now fails
+      // loud instead of being silently absorbed into a fake repo.
+      expect(byName.get("repo_root")!.dflt_value).toBeNull();
       expect(byName.get("branch")!.notnull).toBe(0);
       expect(byName.get("session_id")!.notnull).toBe(1);
       expect(byName.get("mode")!.notnull).toBe(1);
