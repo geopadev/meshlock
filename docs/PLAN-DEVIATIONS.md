@@ -19,7 +19,12 @@ sub-number (anything not in v6) is marked **[architect-invented]**.
 - v6 defines: M1, M2, **M2.5**, M3, **M3.5**, M4, M5, M6, M7, M8, M9, M10.
 - The architect may split any milestone into `Mx.1`, `Mx.2`, `Mx.1b`, etc.
   These sub-numbers are **our** invention and do **not** appear in v6.
-- When reading v6, mentally map our sub-numbers back to the parent milestone.
+- **Side-milestones** use an `S` prefix (S1, S2, ...). These are whole milestones
+  NOT in v6, spawned by an architecture decision/issue mid-build. They branch off
+  the issue rather than renumbering the M-sequence: they slot into BUILD ORDER at a
+  point but sit OUTSIDE the M-numbering, so v6's numbers never shift.
+- When reading v6, mentally map our sub-numbers back to the parent milestone; S-items
+  have no v6 equivalent at all.
 
 ---
 
@@ -150,6 +155,46 @@ registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON
   marks own-branch locks (`lock.branch === currentBranch`, null===null handled). Empty → "No active
   locks." config passed but unused (`void config`, signature uniformity). 53 tests. M3 tool set now
   COMPLETE: check / acquire / release / team_status.
+## S1 — Repo scoping  📋 [SIDE-MILESTONE — not in v6]
+
+**Why this exists (the deviation):** During M3.3b planning we decided `meshlock init` should
+register the MCP server **user-globally** (one registration, all repos) rather than project-level,
+because not all agents support project-level config. But a globally-launched server has no
+inherent idea WHICH repo a given tool call concerns, and the current design assumes one global
+DB at `~/.meshlock/meshlock.db` with lock identity `(path, branch)`. Under global registration
+that breaks: multiple repos' locks collide in one DB, and `process.cwd()` may not be the agent's
+repo. So locks must be scoped by repo. This is an architecture requirement surfaced by the
+registration decision — a whole milestone with NO v6 equivalent. Hence a side-milestone (S1),
+slotted before `meshlock init` in build order without disturbing the M-numbering.
+
+**Decision — Option B (global DB + repo_root column), chosen for relay-conformance:**
+- Considered: (A) DB-per-repo file; (B) one global DB with a `repo_root` column; (multi-table
+  per repo = rejected anti-pattern). Chose B because the M8 relay broadcasts lock events tagged
+  by repo — with `repo_root` as a first-class column the tag travels with the row; with per-repo
+  files the repo identity lives in the file path and must be reattached out-of-band. B conforms
+  to where the relay goes. (Architect initially leaned A, revised to B after tracing the relay
+  forward — logged honestly.)
+- **`repo_root` is a SENTINEL, never NULL:** resolved via `git rev-parse --show-toplevel` on
+  `dirname(path)`. (Note: dirname(path) is CORRECT here — repo membership is a property of where
+  the file lives — unlike branch resolution, which is a repo property and uses cwd.) For a
+  non-git file, the sentinel is the file's absolute directory. Keeping repo_root non-null avoids
+  the NULL-uniqueness trap (M2.5) for this column. `branch` stays nullable as before.
+- Lock identity becomes `(repo_root, path, branch)`. Every engine query gains a repo_root filter
+  — this is the cross-repo-leak risk: a forgotten filter leaks locks across repos.
+- Caller (the MCP tool) resolves repo_root via a new `getRepoRoot()` in core/git.ts and passes
+  it into the synchronous engine — git I/O stays out of the transaction (same discipline as branch).
+
+**Planned split:**
+- 📋 **S1a:** `getRepoRoot` helper in core/git.ts + `003` migration (rebuild locks,
+  add `repo_root TEXT NOT NULL`, UNIQUE(repo_root, path, branch)) + engine identity change
+  (all five functions repo-scoped). Opus/xhigh — schema + conflict-logic change.
+- 📋 **S1b:** thread repo_root through the four MCP tools (each resolves getRepoRoot(dirname(path))
+  and passes it in).
+
+**Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
+
+---
+
 - 📋 **M3.3b [architect-invented]:** `meshlock init` (write MCP server registration into Claude Code
   config) + the live-agent-over-JSON-RPC moment. NOT YET BUILT. This is where the live registration
   test (open since M3.2, spans all 4 tools) finally gets solved — registering + watching real
@@ -188,8 +233,13 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M3.3a accepted → 📋 **M3.3b next** (meshlock init + live registration +
-the first demo-able JSON-RPC moment). Then M3.5 (change briefing — the differentiator).
+**Active milestone:** ✅ M3.3a accepted → 📋 **S1a next** (side-milestone: repo scoping —
+getRepoRoot + 003 migration + repo-scoped engine identity). Then S1b (thread repo_root through
+tools), then M3.3b (meshlock init, user-global registration), then M3.5 (change briefing).
+
+**Side-milestone note:** S1 (repo scoping) is NOT in v6 — spawned by the user-global-registration
+decision. Option B chosen (global DB + repo_root column) for relay-conformance. Slots before
+meshlock init in build order, outside the M-numbering.
 
 **Built & reviewed so far:** M1 (config), M2.1 (db), M2.2 (lock engine),
 M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock),
