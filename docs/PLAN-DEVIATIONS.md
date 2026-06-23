@@ -145,9 +145,15 @@ registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON
   (subprocess per call). git.test.ts uses real temp git repos → closes the named-branch coverage gap.
   acquire-lock.test.ts: assertions unchanged, chdir-to-non-git-tempdir in setup (disclosed). 49 tests.
   core/git.ts imports nothing from mcp/ — dependency direction intact.
-- 📋 **M3.3 [architect-invented]:** `team_status` tool + `meshlock init` registration. NOT YET BUILT.
-  team_status will consume getCurrentBranch. Live registration test (M3.2/b/c issue #3) gets solved
-  here — registering in Claude Code + watching real JSON-RPC IS the live test.
+- ✅ **M3.3a [architect-invented]:** `team_status` tool. No-input read-only survey of all active
+  locks. Reads listLocks + getCurrentBranch (2nd consumer of the helper), formats a text block,
+  marks own-branch locks (`lock.branch === currentBranch`, null===null handled). Empty → "No active
+  locks." config passed but unused (`void config`, signature uniformity). 53 tests. M3 tool set now
+  COMPLETE: check / acquire / release / team_status.
+- 📋 **M3.3b [architect-invented]:** `meshlock init` (write MCP server registration into Claude Code
+  config) + the live-agent-over-JSON-RPC moment. NOT YET BUILT. This is where the live registration
+  test (open since M3.2, spans all 4 tools) finally gets solved — registering + watching real
+  JSON-RPC IS the test. First demo-able / promotable moment.
 
 **Why split:** four tools + init registration far exceeds the 6-file cap and mixes concerns;
 `check_lock` first (read-only) de-risks the transport/registration plumbing before any
@@ -182,13 +188,13 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M3.2c accepted → 📋 **M3.3 next** (team_status + meshlock init +
-the live-agent-over-JSON-RPC payoff). team_status consumes core/git.ts's getCurrentBranch.
+**Active milestone:** ✅ M3.3a accepted → 📋 **M3.3b next** (meshlock init + live registration +
+the first demo-able JSON-RPC moment). Then M3.5 (change briefing — the differentiator).
 
 **Built & reviewed so far:** M1 (config), M2.1 (db), M2.2 (lock engine),
 M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock),
-M3.2b (release_lock), M3.2c (core/git.ts cached branch resolver). Full check/acquire/release
-lifecycle live; branch resolution centralized + cached.
+M3.2b (release_lock), M3.2c (core/git.ts cached resolver), M3.3a (team_status). Full 4-tool
+MCP surface complete; branch resolution centralized + cached.
 
 **Pending teaching:** Block 6 (NULL three-valued logic, undefined-vs-null, z.infer) proposed
 but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compound.
@@ -206,6 +212,7 @@ but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compoun
 - [M4 daemon-lifecycle] Guarantee session_id stability across a daemon run; decide regeneration policy (M3.2b issue #3). TTL is the safety net meanwhile.
 - [M5 enhancement] Git hook busts the branch cache on checkout (event-driven invalidation; replaces TTL-guessing for the common case). 5s TTL stays as fallback. (M3.2c issue #1)
 - [conditional] If vitest pool changes forks→threads, chdir in acquire tests breaks; replace with a cwd seam on the handler (pass cwd in rather than reading process.cwd() globally). (M3.2c issue #2)
+- [chore] Shared test/fixtures.ts — makeConfig() is duplicated across acquire/release/team-status test files (M3.3a issue #4).
 
 > Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
 > conflict / issue #1) live in BACKLOG.md, not here. This file tracks build-sequence follow-ons only.
