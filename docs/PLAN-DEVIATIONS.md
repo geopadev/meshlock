@@ -184,12 +184,15 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
 - Caller (the MCP tool) resolves repo_root via a new `getRepoRoot()` in core/git.ts and passes
   it into the synchronous engine — git I/O stays out of the transaction (same discipline as branch).
 
-**Planned split:**
-- 📋 **S1a:** `getRepoRoot` helper in core/git.ts + `003` migration (rebuild locks,
-  add `repo_root TEXT NOT NULL`, UNIQUE(repo_root, path, branch)) + engine identity change
-  (all five functions repo-scoped). Opus/xhigh — schema + conflict-logic change.
-- 📋 **S1b:** thread repo_root through the four MCP tools (each resolves getRepoRoot(dirname(path))
-  and passes it in).
+**Planned split (S1a split further — engine change isolated from migration, à la M2.1/M2.2):**
+- 📋 **S1a:** `getRepoRoot` helper in core/git.ts + `003` migration (rebuild locks, add
+  `repo_root TEXT NOT NULL`, UNIQUE(repo_root, path, branch)) + their tests. STORAGE FOUNDATION
+  ONLY — no engine logic change. Sonnet-ish: migration mechanics + a focused git helper.
+- 📋 **S1b:** engine identity change — all five functions (acquire/release/check/list/expireStale)
+  become repo-scoped; identity (repo_root, path, branch); every WHERE gains repo_root; two-repo
+  isolation test. Opus/xhigh — the delicate conflict-logic change with cross-repo-leak risk.
+- 📋 **S1c:** thread repo_root through the four MCP tools (each resolves getRepoRoot(dirname(path))
+  and passes it into the engine).
 
 **Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
 
@@ -234,8 +237,9 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 ## Current position
 
 **Active milestone:** ✅ M3.3a accepted → 📋 **S1a next** (side-milestone: repo scoping —
-getRepoRoot + 003 migration + repo-scoped engine identity). Then S1b (thread repo_root through
-tools), then M3.3b (meshlock init, user-global registration), then M3.5 (change briefing).
+getRepoRoot helper + 003 migration + tests, STORAGE FOUNDATION ONLY). Then S1b (repo-scoped
+engine identity — the delicate part), S1c (thread repo_root through tools), then M3.3b
+(meshlock init, user-global registration), then M3.5 (change briefing).
 
 **Side-milestone note:** S1 (repo scoping) is NOT in v6 — spawned by the user-global-registration
 decision. Option B chosen (global DB + repo_root column) for relay-conformance. Slots before
