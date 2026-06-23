@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { simpleGit } from "simple-git";
-import { getCurrentBranch, clearBranchCache } from "./git.js";
+import { getCurrentBranch, getRepoRoot, clearBranchCache } from "./git.js";
 
 let tempDir: string;
 
@@ -60,5 +60,38 @@ describe("getCurrentBranch", () => {
 
     clearBranchCache();
     expect(await getCurrentBranch(tempDir)).toBe("switched");
+  });
+});
+
+describe("getRepoRoot", () => {
+  it("returns the repository top-level path inside a git repo", async () => {
+    await makeGitRepo(tempDir, "feature-x");
+    // git --show-toplevel returns the symlink-resolved path, so normalize both
+    // sides with realpath (matters on macOS where /tmp -> /private/tmp).
+    expect(await getRepoRoot(tempDir)).toBe(await realpath(tempDir));
+  });
+
+  it("returns the directory's own absolute path (sentinel) when not a git repo", async () => {
+    const root = await getRepoRoot(tempDir);
+    expect(root).toBe(resolve(tempDir));
+    expect(root).not.toBe(""); // a real path, never null/empty
+  });
+
+  it("caches within the TTL and re-resolves after clearBranchCache", async () => {
+    await makeGitRepo(tempDir, "feature-x");
+    const sub = join(tempDir, "sub");
+    await mkdir(sub);
+
+    // From a subdirectory, the repo root is the repo top-level.
+    const repoTop = await realpath(tempDir);
+    expect(await getRepoRoot(sub)).toBe(repoTop);
+
+    // Deinit the repo; within the TTL the cache still answers with the old root.
+    await rm(join(tempDir, ".git"), { recursive: true, force: true });
+    expect(await getRepoRoot(sub)).toBe(repoTop);
+
+    // After clearing, it re-resolves to the sentinel (sub's own absolute path).
+    clearBranchCache();
+    expect(await getRepoRoot(sub)).toBe(resolve(sub));
   });
 });
