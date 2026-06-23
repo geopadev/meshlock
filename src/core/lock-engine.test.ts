@@ -18,6 +18,11 @@ let db: MeshLockDatabase;
 const SESSION_A = "11111111-1111-4111-8111-111111111111";
 const SESSION_B = "22222222-2222-4222-8222-222222222222";
 
+// A single shared repo for the non-isolation tests: adding repo_root to every
+// call must not change the branch/conflict behavior proven in M2/M2.5.
+const REPO_A = "/repos/alpha";
+const REPO_B = "/repos/beta";
+
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "meshlock-lock-test-"));
   dbPath = join(tempDir, "test.db");
@@ -36,14 +41,15 @@ function seedLock(
   sessionId: string,
   expiresAt: string,
   acquiredAt = "2000-01-01T00:00:00.000Z",
-  mode = "exclusive"
+  mode = "exclusive",
+  repoRoot = REPO_A
 ): void {
   conn
     .prepare(
-      `INSERT INTO locks (path, session_id, mode, acquired_at, expires_at)
-       VALUES (?, ?, ?, ?, ?)`
+      `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?)`
     )
-    .run(path, sessionId, mode, acquiredAt, expiresAt);
+    .run(repoRoot, path, sessionId, mode, acquiredAt, expiresAt);
 }
 
 function rowCount(conn: MeshLockDatabase, path?: string): number {
@@ -60,6 +66,7 @@ function rowCount(conn: MeshLockDatabase, path?: string): number {
 describe("acquireLock — conflict", () => {
   it("returns a held conflict when another live session owns the path", () => {
     const a = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -68,6 +75,7 @@ describe("acquireLock — conflict", () => {
     expect(a.ok).toBe(true);
 
     const b = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -90,6 +98,7 @@ describe("acquireLock — conflict", () => {
 describe("acquireLock — same-session re-acquire", () => {
   it("refreshes the lock and advances expires_at without adding a row", () => {
     const first = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -99,6 +108,7 @@ describe("acquireLock — same-session re-acquire", () => {
     const firstExpiry = first.ok ? first.lock.expires_at : "";
 
     const second = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -116,6 +126,7 @@ describe("acquireLock — same-session re-acquire", () => {
 describe("releaseLock — ownership", () => {
   it("only the owning session can release; others are a no-op", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -123,16 +134,22 @@ describe("releaseLock — ownership", () => {
     });
 
     // B does not own it: nothing removed.
-    expect(releaseLock(db, { path: "/repo/file.ts", sessionId: SESSION_B })).toBe(false);
+    expect(
+      releaseLock(db, { repoRoot: REPO_A, path: "/repo/file.ts", sessionId: SESSION_B })
+    ).toBe(false);
     expect(rowCount(db, "/repo/file.ts")).toBe(1);
 
     // A owns it: removed.
-    expect(releaseLock(db, { path: "/repo/file.ts", sessionId: SESSION_A })).toBe(true);
-    expect(checkLock(db, "/repo/file.ts").held).toBe(false);
+    expect(
+      releaseLock(db, { repoRoot: REPO_A, path: "/repo/file.ts", sessionId: SESSION_A })
+    ).toBe(true);
+    expect(checkLock(db, REPO_A, "/repo/file.ts").held).toBe(false);
   });
 
   it("releasing a path with no lock is a no-op returning false", () => {
-    expect(releaseLock(db, { path: "/nope", sessionId: SESSION_A })).toBe(false);
+    expect(releaseLock(db, { repoRoot: REPO_A, path: "/nope", sessionId: SESSION_A })).toBe(
+      false
+    );
   });
 });
 
@@ -141,9 +158,10 @@ describe("TTL expiry", () => {
     // Seed an already-expired lock owned by A.
     seedLock(db, "/repo/file.ts", SESSION_A, "2000-01-01T00:00:01.000Z");
 
-    expect(checkLock(db, "/repo/file.ts").held).toBe(false);
+    expect(checkLock(db, REPO_A, "/repo/file.ts").held).toBe(false);
 
     const fresh = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -158,12 +176,13 @@ describe("TTL expiry", () => {
 describe("checkLock", () => {
   it("reports a live lock as held with its details", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/live.ts",
       sessionId: SESSION_A,
       mode: "advisory",
       timeoutSeconds: 1800,
     });
-    const result = checkLock(db, "/repo/live.ts");
+    const result = checkLock(db, REPO_A, "/repo/live.ts");
     expect(result.held).toBe(true);
     if (result.held) {
       expect(result.lock.session_id).toBe(SESSION_A);
@@ -172,19 +191,21 @@ describe("checkLock", () => {
   });
 
   it("reports an unknown path as free", () => {
-    expect(checkLock(db, "/unknown").held).toBe(false);
+    expect(checkLock(db, REPO_A, "/unknown").held).toBe(false);
   });
 });
 
 describe("listLocks", () => {
   it("returns only non-expired locks, ordered by path", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/live-b.ts",
       sessionId: SESSION_B,
       mode: "advisory",
       timeoutSeconds: 1800,
     });
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/live-a.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -192,7 +213,7 @@ describe("listLocks", () => {
     });
     seedLock(db, "/repo/dead.ts", SESSION_A, "2000-01-01T00:30:00.000Z");
 
-    const live = listLocks(db);
+    const live = listLocks(db, REPO_A);
     expect(live.map((l) => l.path)).toEqual(["/repo/live-a.ts", "/repo/live-b.ts"]);
   });
 });
@@ -200,6 +221,7 @@ describe("listLocks", () => {
 describe("expireStaleLocks", () => {
   it("deletes only expired rows and returns how many were removed", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/live.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -210,13 +232,14 @@ describe("expireStaleLocks", () => {
 
     expect(expireStaleLocks(db)).toBe(2);
 
-    const remaining = listLocks(db).map((l) => l.path);
+    const remaining = listLocks(db, REPO_A).map((l) => l.path);
     expect(remaining).toEqual(["/repo/live.ts"]);
     expect(rowCount(db)).toBe(1);
   });
 
   it("returns 0 when nothing is expired", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/live.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -230,6 +253,7 @@ describe("expireStaleLocks", () => {
 describe("acquireLock — branch dimension", () => {
   it("same branch, different session → still hard-blocks", () => {
     const a = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -239,6 +263,7 @@ describe("acquireLock — branch dimension", () => {
     expect(a.ok).toBe(true);
 
     const b = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -251,6 +276,7 @@ describe("acquireLock — branch dimension", () => {
 
   it("cross-branch with crossBranchMode 'warn' → succeeds AND carries a warning", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -259,6 +285,7 @@ describe("acquireLock — branch dimension", () => {
     });
 
     const b = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -281,6 +308,7 @@ describe("acquireLock — branch dimension", () => {
 
   it("cross-branch with crossBranchMode 'block' → hard conflict", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -289,6 +317,7 @@ describe("acquireLock — branch dimension", () => {
     });
 
     const b = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -304,6 +333,7 @@ describe("acquireLock — branch dimension", () => {
 
   it("cross-branch with crossBranchMode 'ignore' → succeeds, no warning", () => {
     acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -312,6 +342,7 @@ describe("acquireLock — branch dimension", () => {
     });
 
     const b = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -326,10 +357,11 @@ describe("acquireLock — branch dimension", () => {
   });
 
   it("two branchless (null) locks on the same path, different sessions → still block", () => {
-    // This is the crucial one: UNIQUE(path, branch) will NOT stop two (path,
-    // NULL) rows because SQL treats NULL != NULL. The block here is enforced by
-    // the engine's selectSame check, not by the database constraint.
+    // This is the crucial one: UNIQUE(repo_root, path, branch) will NOT stop two
+    // (path, NULL) rows because SQL treats NULL != NULL. The block here is
+    // enforced by the engine's selectSame check, not by the database constraint.
     const a = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -339,6 +371,7 @@ describe("acquireLock — branch dimension", () => {
     expect(a.ok).toBe(true);
 
     const b = acquireLock(db, {
+      repoRoot: REPO_A,
       path: "/repo/file.ts",
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -348,6 +381,46 @@ describe("acquireLock — branch dimension", () => {
     expect(b).toEqual({ ok: false, reason: "held", heldBy: SESSION_A });
     // Proof the constraint did not silently allow a second branchless row.
     expect(rowCount(db, "/repo/file.ts")).toBe(1);
+  });
+});
+
+describe("acquireLock — repo isolation", () => {
+  it("same path and branch in different repos do not conflict", () => {
+    const a = acquireLock(db, {
+      repoRoot: REPO_A,
+      path: "src/index.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+    expect(a.ok).toBe(true);
+
+    // Same path, same branch, DIFFERENT repo, different session → must succeed.
+    const b = acquireLock(db, {
+      repoRoot: REPO_B,
+      path: "src/index.ts",
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+    });
+    expect(b.ok).toBe(true);
+
+    // Both rows coexist — repo_root genuinely isolates them.
+    expect(rowCount(db, "src/index.ts")).toBe(2);
+
+    // checkLock is repo-scoped: each repo sees only its own holder.
+    const ca = checkLock(db, REPO_A, "src/index.ts");
+    const cb = checkLock(db, REPO_B, "src/index.ts");
+    expect(ca.held).toBe(true);
+    if (ca.held) expect(ca.lock.session_id).toBe(SESSION_A);
+    expect(cb.held).toBe(true);
+    if (cb.held) expect(cb.lock.session_id).toBe(SESSION_B);
+
+    // listLocks is repo-scoped: repo A does not see repo B's lock and vice versa.
+    expect(listLocks(db, REPO_A).map((l) => l.repo_root)).toEqual([REPO_A]);
+    expect(listLocks(db, REPO_B).map((l) => l.repo_root)).toEqual([REPO_B]);
   });
 });
 
@@ -365,10 +438,11 @@ describe("concurrency — two connections to the same DB file", () => {
       connA.exec("BEGIN IMMEDIATE");
       connA
         .prepare(
-          `INSERT INTO locks (path, session_id, mode, acquired_at, expires_at)
-           VALUES (?, ?, ?, ?, ?)`
+          `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at)
+           VALUES (?, ?, ?, ?, ?, ?)`
         )
         .run(
+          REPO_A,
           "/repo/contended.ts",
           SESSION_A,
           "exclusive",
@@ -380,6 +454,7 @@ describe("concurrency — two connections to the same DB file", () => {
       let code: string | undefined;
       try {
         acquireLock(connB, {
+          repoRoot: REPO_A,
           path: "/repo/contended.ts",
           sessionId: SESSION_B,
           mode: "exclusive",
@@ -413,12 +488,14 @@ describe("concurrency — two connections to the same DB file", () => {
       // runs its own BEGIN IMMEDIATE against the shared file: the first commits,
       // the second's transaction then reads the committed row and reports held.
       const r1 = acquireLock(connA, {
+        repoRoot: REPO_A,
         path,
         sessionId: SESSION_A,
         mode: "exclusive",
         timeoutSeconds: 1800,
       });
       const r2 = acquireLock(connB, {
+        repoRoot: REPO_A,
         path,
         sessionId: SESSION_B,
         mode: "exclusive",
