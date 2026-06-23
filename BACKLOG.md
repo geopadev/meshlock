@@ -33,3 +33,8 @@
 - Branchless (non-git / disconnected-checkout) vs branched: should it count as
   a cross-branch conflict? Currently yes (warn default). Tracked in
   geopadev/meshlock#1 — needs real user feedback before changing.
+
+## MCP tool surface refinements (deferred during M3.3a)
+- Structured (JSON) team_status output variant alongside the human-readable text,
+  for reliable machine consumption by agents that act programmatically. Decide if
+  consumers want machine-readable status once there's real usage.
