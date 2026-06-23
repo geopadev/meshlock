@@ -11,6 +11,10 @@ import {
   releaseLockToolConfig,
   makeReleaseLockHandler,
 } from "./tools/release-lock.js";
+import {
+  teamStatusToolConfig,
+  makeTeamStatusHandler,
+} from "./tools/team-status.js";
 
 /**
  * Create the MCP server and register MeshLock's tools against `db`. `config`
@@ -32,6 +36,11 @@ export function createServer(db: MeshLockDatabase, config: Config): McpServer {
     "release_lock",
     releaseLockToolConfig,
     makeReleaseLockHandler(db, config)
+  );
+  server.registerTool(
+    "team_status",
+    teamStatusToolConfig,
+    makeTeamStatusHandler(db, config)
   );
   return server;
 }
