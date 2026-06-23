@@ -1,25 +1,31 @@
+import { resolve } from "node:path";
 import { simpleGit } from "simple-git";
 
 /**
- * How long a resolved branch stays cached per working directory. Short enough
- * that a `git checkout` is picked up quickly, long enough that a burst of tool
- * calls spawns at most one `git` subprocess per window.
+ * How long a resolved git fact (branch or repo root) stays cached per working
+ * directory. Short enough that a `git checkout` is picked up quickly, long
+ * enough that a burst of tool calls spawns at most one `git` subprocess per
+ * window.
  */
 export const BRANCH_CACHE_TTL_MS = 5000;
 
-interface CacheEntry {
-  value: string | null;
+interface CacheEntry<T> {
+  value: T;
   expiresAt: number;
 }
 
 // Keyed by working directory — different cwds can be different repositories, so
-// they must not share a cached branch. Module-level, so it survives across
-// calls; tests reset it with clearBranchCache().
-const cache = new Map<string, CacheEntry>();
+// they must not share a cached value. Branch and repo root are cached
+// separately: they answer different questions and have different value types
+// (branch may be null; repo root is always a string). Module-level, so they
+// survive across calls; tests reset both with clearBranchCache().
+const branchCache = new Map<string, CacheEntry<string | null>>();
+const repoRootCache = new Map<string, CacheEntry<string>>();
 
-/** Drop all cached branch resolutions. Mainly for tests. */
+/** Drop all cached git resolutions (branch and repo root). Mainly for tests. */
 export function clearBranchCache(): void {
-  cache.clear();
+  branchCache.clear();
+  repoRootCache.clear();
 }
 
 /**
@@ -39,13 +45,13 @@ export function clearBranchCache(): void {
 export async function getCurrentBranch(
   cwd: string = process.cwd()
 ): Promise<string | null> {
-  const cached = cache.get(cwd);
+  const cached = branchCache.get(cwd);
   if (cached && Date.now() < cached.expiresAt) {
     return cached.value;
   }
 
   const value = await resolveBranch(cwd);
-  cache.set(cwd, { value, expiresAt: Date.now() + BRANCH_CACHE_TTL_MS });
+  branchCache.set(cwd, { value, expiresAt: Date.now() + BRANCH_CACHE_TTL_MS });
   return value;
 }
 
@@ -58,5 +64,41 @@ async function resolveBranch(cwd: string): Promise<string | null> {
     return branch === "" || branch === "HEAD" ? null : branch;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Resolve the git repository root that `cwd` belongs to (defaults to the
+ * process's working directory; callers scoping a file pass that file's
+ * directory, since repo membership is a property of where the file lives).
+ *
+ * Unlike {@link getCurrentBranch}, this returns a non-null SENTINEL: when `cwd`
+ * is not inside a git repo (or any git error), it returns the absolute path of
+ * `cwd` itself. A non-git file's "repo root" is just its own directory. This
+ * keeps repo_root out of the NULL-uniqueness trap — it is always a real string,
+ * so a UNIQUE(repo_root, ...) constraint behaves normally. NEVER throws.
+ *
+ * Cached per cwd for {@link BRANCH_CACHE_TTL_MS}, like branch resolution.
+ */
+export async function getRepoRoot(cwd: string = process.cwd()): Promise<string> {
+  const cached = repoRootCache.get(cwd);
+  if (cached && Date.now() < cached.expiresAt) {
+    return cached.value;
+  }
+
+  const value = await resolveRepoRoot(cwd);
+  repoRootCache.set(cwd, { value, expiresAt: Date.now() + BRANCH_CACHE_TTL_MS });
+  return value;
+}
+
+async function resolveRepoRoot(cwd: string): Promise<string> {
+  try {
+    const root = (
+      await simpleGit(cwd).revparse(["--show-toplevel"])
+    ).trim();
+    return root === "" ? resolve(cwd) : root;
+  } catch {
+    // Not a git repo (or git unavailable): the file's own directory is its scope.
+    return resolve(cwd);
   }
 }

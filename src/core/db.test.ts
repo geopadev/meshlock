@@ -27,7 +27,7 @@ describe("openDatabase", () => {
     }
   });
 
-  it("records both migrations in filename order", () => {
+  it("records all migrations in filename order", () => {
     const db = openDatabase(dbPath);
     try {
       const applied = db
@@ -37,6 +37,7 @@ describe("openDatabase", () => {
       expect(applied.map((m) => m.name)).toEqual([
         "001_create_locks.sql",
         "002_add_branch_to_locks.sql",
+        "003_add_repo_root_to_locks.sql",
       ]);
       // Each applied_at should be a parseable ISO timestamp.
       for (const m of applied) {
@@ -47,7 +48,7 @@ describe("openDatabase", () => {
     }
   });
 
-  it("creates the locks table with the post-002 schema (branch column, composite uniqueness)", () => {
+  it("creates the locks table with the post-003 schema (repo_root column, three-way uniqueness)", () => {
     const db = openDatabase(dbPath);
     try {
       const columns = db
@@ -55,27 +56,29 @@ describe("openDatabase", () => {
         .all() as { name: string; notnull: number; pk: number }[];
 
       const byName = new Map(columns.map((c) => [c.name, c]));
-      // `branch` is now present alongside the original five columns.
+      // `repo_root` is now present alongside the post-002 columns.
       expect([...byName.keys()].sort()).toEqual([
         "acquired_at",
         "branch",
         "expires_at",
         "mode",
         "path",
+        "repo_root",
         "session_id",
       ]);
 
-      // After the 002 rebuild path is no longer a PRIMARY KEY; identity moved to
-      // the UNIQUE(path, branch) index, so no column is flagged as pk.
+      // Identity lives in the UNIQUE(repo_root, path, branch) index, so no column
+      // is flagged as a PRIMARY KEY.
       expect(byName.get("path")!.pk).toBe(0);
-      // branch is nullable; the rest stay NOT NULL.
+      // repo_root is a non-null sentinel; branch stays nullable; the rest NOT NULL.
+      expect(byName.get("repo_root")!.notnull).toBe(1);
       expect(byName.get("branch")!.notnull).toBe(0);
       expect(byName.get("session_id")!.notnull).toBe(1);
       expect(byName.get("mode")!.notnull).toBe(1);
       expect(byName.get("acquired_at")!.notnull).toBe(1);
       expect(byName.get("expires_at")!.notnull).toBe(1);
 
-      // A unique index spanning (path, branch) exists.
+      // A unique index spanning (repo_root, path, branch) exists.
       const indexes = db.prepare("PRAGMA index_list(locks)").all() as {
         name: string;
         unique: number;
@@ -87,7 +90,7 @@ describe("openDatabase", () => {
             (c) => c.name
           )
         );
-      expect(uniqueCols).toContainEqual(["path", "branch"]);
+      expect(uniqueCols).toContainEqual(["repo_root", "path", "branch"]);
     } finally {
       db.close();
     }
