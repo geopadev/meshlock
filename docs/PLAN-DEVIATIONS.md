@@ -194,13 +194,19 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
   default so a missing value fails LOUD instead of silently bucketing into '(unknown)' (an identity
   column should never silently default). Until S1b, all locks share repo_root='(unknown)' — scoping
   is inert by design at this stage.
-- 📋 **S1b:** engine identity change — all five functions (acquire/release/check/list/expireStale)
-  become repo-scoped; identity (repo_root, path, branch); every WHERE gains repo_root; two-repo
-  isolation test. PLUS: remove the 003 DEFAULT (or convert to a named/documented constant) so missing
-  repo_root fails loud. Opus/xhigh — the delicate conflict-logic change with cross-repo-leak risk.
+- ✅ **S1b:** engine identity now (repo_root, path, branch). All five functions repo-scoped; every
+  WHERE leads with `repo_root = ?` (plain `=` — non-null sentinel; branch keeps `IS`). checkLock/listLocks
+  gained a repoRoot arg (now per-repo). repoRoot is a REQUIRED input (no default) — type-level guard;
+  forgetting it is a compile error. `004` migration drops the repo_root DEFAULT → missing repo_root now
+  fails loud. expireStaleLocks deliberately stays GLOBAL (reaping dead rows is repo-agnostic; commented).
+  Isolation test proves same-path+branch in different repos coexist (the cross-repo-leak proof). M2.5
+  branch logic wrapped not rewritten (its tests pass with repo_root added). 29 core tests pass in isolation.
+  ⚠️ EXPECTED: the MCP tools do NOT compile until S1c supplies repoRoot — the required-param forcing
+  function. Repo is a known-red intermediate between S1b and S1c; do S1c next to restore a building tree.
 - 📋 **S1c:** thread repo_root through the four MCP tools (each resolves getRepoRoot(dirname(path))
-  and passes it into the engine). PLUS: sentinel must use realpath (not just resolve) to match git's
-  symlink-resolved --show-toplevel, else symlinked vs real path → duplicate repo_root → duplicate locks.
+  and passes it into the engine). Makes the tree compile/build again. PLUS: sentinel must use realpath
+  (not just resolve) to match git's symlink-resolved --show-toplevel, else symlinked vs real path →
+  duplicate repo_root → duplicate locks.
 
 **Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
 
@@ -244,9 +250,9 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ S1a accepted → 📋 **S1b next** (repo-scoped engine identity — the
-delicate part, Opus/xhigh; also removes the 003 DEFAULT so missing repo_root fails loud). Then
-S1c (thread through tools + realpath the sentinel), then M3.3b (meshlock init), then M3.5.
+**Active milestone:** ✅ S1b accepted → 📋 **S1c next** (thread repo_root through the four MCP
+tools + realpath the sentinel — restores a building tree). Then M3.3b (meshlock init), then M3.5.
+NOTE: repo is a known-red intermediate right now (tools don't compile until S1c) — do S1c next.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a, S1a.
 Full 4-tool MCP surface; branch + repo-root resolution centralized & cached; locks table has the
@@ -279,6 +285,8 @@ but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compoun
 - [conditional] If vitest pool changes forks→threads, chdir in acquire tests breaks; replace with a cwd seam on the handler (pass cwd in rather than reading process.cwd() globally). (M3.2c issue #2)
 - [chore] Shared test/fixtures.ts — makeConfig() is duplicated across acquire/release/team-status test files (M3.3a issue #4).
 - [chore] Rename clearBranchCache() → clearGitCache() — it now clears both branch and repo-root caches; name undersells it (S1a issue #3).
+- [engineering] Structural guard so a future engine query can't silently omit repo_root — a shared repo-scoped query helper or a lint rule. Design when a 6th query appears (S1b issue #1).
+- [engineering] Test asserting expireStaleLocks reaps expired rows ACROSS repos — pins its deliberate global-ness so a maintainer can't add a repo filter and silently break cross-repo reaping (S1b issue #2).
 
 > Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
 > conflict / issue #1) live in BACKLOG.md, not here. This file tracks build-sequence follow-ons only.
