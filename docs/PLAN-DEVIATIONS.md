@@ -185,14 +185,22 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
   it into the synchronous engine — git I/O stays out of the transaction (same discipline as branch).
 
 **Planned split (S1a split further — engine change isolated from migration, à la M2.1/M2.2):**
-- 📋 **S1a:** `getRepoRoot` helper in core/git.ts + `003` migration (rebuild locks, add
-  `repo_root TEXT NOT NULL`, UNIQUE(repo_root, path, branch)) + their tests. STORAGE FOUNDATION
-  ONLY — no engine logic change. Sonnet-ish: migration mechanics + a focused git helper.
+- ✅ **S1a:** `getRepoRoot(cwd?)` in core/git.ts (non-null sentinel = resolve(cwd) outside a repo;
+  separate repoRootCache from branchCache, shared TTL; clearBranchCache clears both) + `003`
+  migration (rebuild locks, repo_root TEXT NOT NULL **DEFAULT '(unknown)'**, UNIQUE(repo_root,path,branch))
+  + schema/git tests. STORAGE ONLY — engine untouched (engine tests pass unchanged = proof). 56 tests.
+  ⚠️ CARRIED INTO S1b: the `DEFAULT '(unknown)'` was needed because the un-updated engine INSERT omits
+  repo_root. It must be RESOLVED in S1b — once the engine supplies repo_root explicitly, REMOVE the
+  default so a missing value fails LOUD instead of silently bucketing into '(unknown)' (an identity
+  column should never silently default). Until S1b, all locks share repo_root='(unknown)' — scoping
+  is inert by design at this stage.
 - 📋 **S1b:** engine identity change — all five functions (acquire/release/check/list/expireStale)
   become repo-scoped; identity (repo_root, path, branch); every WHERE gains repo_root; two-repo
-  isolation test. Opus/xhigh — the delicate conflict-logic change with cross-repo-leak risk.
+  isolation test. PLUS: remove the 003 DEFAULT (or convert to a named/documented constant) so missing
+  repo_root fails loud. Opus/xhigh — the delicate conflict-logic change with cross-repo-leak risk.
 - 📋 **S1c:** thread repo_root through the four MCP tools (each resolves getRepoRoot(dirname(path))
-  and passes it into the engine).
+  and passes it into the engine). PLUS: sentinel must use realpath (not just resolve) to match git's
+  symlink-resolved --show-toplevel, else symlinked vs real path → duplicate repo_root → duplicate locks.
 
 **Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
 
@@ -236,10 +244,13 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M3.3a accepted → 📋 **S1a next** (side-milestone: repo scoping —
-getRepoRoot helper + 003 migration + tests, STORAGE FOUNDATION ONLY). Then S1b (repo-scoped
-engine identity — the delicate part), S1c (thread repo_root through tools), then M3.3b
-(meshlock init, user-global registration), then M3.5 (change briefing).
+**Active milestone:** ✅ S1a accepted → 📋 **S1b next** (repo-scoped engine identity — the
+delicate part, Opus/xhigh; also removes the 003 DEFAULT so missing repo_root fails loud). Then
+S1c (thread through tools + realpath the sentinel), then M3.3b (meshlock init), then M3.5.
+
+**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a, S1a.
+Full 4-tool MCP surface; branch + repo-root resolution centralized & cached; locks table has the
+repo_root column (scoping inert until S1b wires the engine).
 
 **Side-milestone note:** S1 (repo scoping) is NOT in v6 — spawned by the user-global-registration
 decision. Option B chosen (global DB + repo_root column) for relay-conformance. Slots before
@@ -267,6 +278,7 @@ but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compoun
 - [M5 enhancement] Git hook busts the branch cache on checkout (event-driven invalidation; replaces TTL-guessing for the common case). 5s TTL stays as fallback. (M3.2c issue #1)
 - [conditional] If vitest pool changes forks→threads, chdir in acquire tests breaks; replace with a cwd seam on the handler (pass cwd in rather than reading process.cwd() globally). (M3.2c issue #2)
 - [chore] Shared test/fixtures.ts — makeConfig() is duplicated across acquire/release/team-status test files (M3.3a issue #4).
+- [chore] Rename clearBranchCache() → clearGitCache() — it now clears both branch and repo-root caches; name undersells it (S1a issue #3).
 
 > Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
 > conflict / issue #1) live in BACKLOG.md, not here. This file tracks build-sequence follow-ons only.
