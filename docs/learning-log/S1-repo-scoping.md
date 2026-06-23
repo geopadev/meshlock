@@ -55,3 +55,59 @@ A: the repos root needs to be the users cwd which is a string unlike branchless 
 The resolution base — repo_root comes from dirname(path) (where the file lives), branch from cwd (whole-repo property); they are NOT the same source (Q1, Q2, Q5)
 The NULL-uniqueness trap — why a nullable repo_root would let duplicate rows past UNIQUE, and why a non-null sentinel avoids it (Q2)
 Why the NOT NULL column needed a DEFAULT — the untouched engine's INSERT omits repo_root, so without a default the next acquireLock throws (Q3)
+
+---
+
+## S1b — repo-scoped engine identity (+ 004 migration) (2026-06-23)
+
+**Built:** The engine's five functions became repo-scoped — lock identity went from
+(path, branch) to (repo_root, path, branch) — and migration 004 removed the S1a
+DEFAULT '(unknown)' shim. AcquireInput and ReleaseInput gained a REQUIRED repoRoot
+string; Lock gained repo_root. Every engine WHERE now leads with repo_root = ?
+(plain `=`, since repo_root is a non-null sentinel; branch keeps `IS` for null-safety):
+acquireLock's same/cross selects + delete + insert, releaseLock's delete, checkLock and
+listLocks (both now take a repoRoot param). expireStaleLocks is the one exception — it
+stays global, because reaping expired rows is repo-agnostic housekeeping. The M2.5 branch
+logic is unchanged in spirit; it now runs inside the repo filter. 004 rebuilds the table
+with repo_root NOT NULL and NO default, so a missing repo_root now throws.
+
+The MCP tools were deliberately NOT updated, so they no longer typecheck — that compile
+failure is the intended forcing function for S1c. The three core suites (engine, db, git)
+pass in isolation; the mcp suites are expected to fail until S1c supplies repoRoot.
+
+**Why this design:** The cross-repo-leak risk is the whole story: one global MCP server
+serves many repos, so if a single WHERE omitted repo_root, that operation would see locks
+across repos (acquiring src/index.ts in repo A would block because repo B holds the same
+path). Leading every WHERE with repo_root prevents it; the two-repo isolation test (same
+path, same branch, different repo → both succeed, neither conflicts) is the proof. Making
+repoRoot a required param (not optional) turns "forgot to scope" into a compile error at
+every call site. Removing the default makes a missing repo_root fail loud instead of being
+silently absorbed into a fake '(unknown)' repo — the worst outcome for an identity column.
+
+**Concepts:** identity as a composite key (repo_root, path, branch), repo-scoped WHERE on
+every query, required param as a type-level guard (compile error if omitted), fail-loud vs
+fail-silent for identity columns (dropping the DEFAULT), `=` for a non-null sentinel vs `IS`
+for a nullable column in the same WHERE, the one intentional exception (expireStaleLocks
+stays global), an intentional compile break as a forcing function for the next milestone.
+
+**Interview Qs:**
+Q: The cross-repo-leak risk: if ONE engine WHERE (say selectSame) forgot `repo_root = ?`, what would the bug look like at runtime, and which test would catch it?
+A: it would throw loudly at runtime missing root directory string. (Incorrect — and this is the crucial point. Forgetting repo_root in a WHERE does NOT throw; it fails SILENTLY. The query would match rows from OTHER repos: e.g. acquiring src/index.ts in repo A would find repo B's lock and wrongly block, or checkLock/listLocks would return another repo's rows. No error at all — that quietness is exactly why it's dangerous. (A throw happens in a different case: omitting repo_root from an INSERT value, since the column is NOT NULL — that's Q3.) The two-repo isolation test catches the WHERE leak: B's acquire would fail instead of succeeding.)
+
+Q: repoRoot is a REQUIRED field on AcquireInput, not optional-with-a-default. What does making it required buy us at the call sites, and what did that choice do to the MCP tools right now?
+A: it bought us certainty that it isn't allowed to work without a directory on accident. (Correct. A required field makes "forgot to scope" a compile error, not a runtime surprise — you cannot call the engine without a repo by accident. The cost/effect right now: the MCP tools, which don't pass repoRoot yet, no longer typecheck — that compile break is the deliberate forcing function for S1c.)
+
+Q: Migration 004 removes the DEFAULT '(unknown)'. Why is "throw when repo_root is missing" the better failure mode than "absorb it into '(unknown)'" for an identity column?
+A: because it would have phantom locks not contributing to anything. (Right direction. With the default, a missing repo_root would silently create real-looking locks in a fake '(unknown)' repo — phantom locks that never match the real repo and hide the bug. Throwing surfaces the bug immediately. The principle: for an identity column, fail loud beats fail silent.)
+
+Q: expireStaleLocks is the one function that does NOT filter by repo_root. Why is that correct rather than a cross-repo leak?
+A: because they are garbage and we don't care about them since anyway they are going to get swept away. (Correct. An expired lock is garbage regardless of which repo it belonged to, so reaping them all in one global sweep is right — there's nothing to "leak" because we're deleting dead rows, not reading or comparing live ones.)
+
+Q: In selectSame the WHERE is `repo_root = ? AND path = ? AND branch IS ?` — plain `=` for repo_root but `IS` for branch. Why the two different operators in one query?
+A: because branch can be null and null = null in sql is false so is makes it true. (Right that branch needs IS for null-safety — small fix: NULL = NULL evaluates to NULL/unknown, not false, though in a WHERE that still excludes the row. The other half: repo_root uses = because it's a non-null sentinel — it can never be null, so plain = is correct and honest.)
+
+**Still fuzzy:**
+
+The cross-repo leak fails SILENTLY, not loudly — a forgotten repo_root in a WHERE reads other repos' rows with no error; the isolation test is what catches it (Q1)
+INSERT-omits-repo_root (throws, NOT NULL) vs WHERE-omits-repo_root (silent leak) are two different failure modes (Q1, Q3)
+NULL = NULL is unknown (not false); repo_root uses = only because it is a guaranteed non-null sentinel (Q5)
