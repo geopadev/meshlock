@@ -203,10 +203,17 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
   branch logic wrapped not rewritten (its tests pass with repo_root added). 29 core tests pass in isolation.
   ⚠️ EXPECTED: the MCP tools do NOT compile until S1c supplies repoRoot — the required-param forcing
   function. Repo is a known-red intermediate between S1b and S1c; do S1c next to restore a building tree.
-- 📋 **S1c:** thread repo_root through the four MCP tools (each resolves getRepoRoot(dirname(path))
-  and passes it into the engine). Makes the tree compile/build again. PLUS: sentinel must use realpath
-  (not just resolve) to match git's symlink-resolved --show-toplevel, else symlinked vs real path →
-  duplicate repo_root → duplicate locks.
+- ✅ **S1c:** repo_root threaded through all four tools. Per-path tools (acquire/release/check)
+  resolve getRepoRoot(dirname(path)); team_status resolves getRepoRoot() (cwd, daemon's repo →
+  per-repo survey). check_lock/release_lock became async (await getRepoRoot before the sync engine
+  call). Sentinel now uses realpath (matches git's symlink-resolved --show-toplevel; resolve()
+  fallback keeps never-throws). server.test.ts also updated (consumes now-async check handler).
+  tsc clean, full pnpm test GREEN — 57 tests. Tree builds again. **S1 (repo scoping) COMPLETE.**
+  ⚠️ PENDING DECISION (S1c issue #1): acquire_lock resolves repo_root from dirname(path) but branch
+  from cwd — if the file is in a different repo than the daemon's cwd, the lock is incoherent (repo B
+  root, repo A branch). Fix options: (a) resolve branch from dirname(path) too [architect lean — makes
+  the lock coherent by construction, generalizes to multi-repo], or (b) reject out-of-repo locks.
+  AWAITING USER DECISION; fold into M3.3b or a small S1d.
 
 **Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
 
@@ -250,9 +257,15 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ S1b accepted → 📋 **S1c next** (thread repo_root through the four MCP
-tools + realpath the sentinel — restores a building tree). Then M3.3b (meshlock init), then M3.5.
-NOTE: repo is a known-red intermediate right now (tools don't compile until S1c) — do S1c next.
+**Active milestone:** ✅ **S1 (repo scoping) COMPLETE** → 📋 **M3.3b next** (meshlock init +
+live JSON-RPC registration — the first demo-able / promotable moment). Then M3.5 (change briefing).
+PENDING: S1c issue #1 (acquire_lock two-bases coherence) — user to pick fix (a) or (b); fold into
+M3.3b or a small S1d.
+
+**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c. Full 4-tool MCP surface, repo-scoped end to end, tree builds (57 tests green).
+Everything needed for an agent to check/acquire/release/survey locks per-repo — EXCEPT the
+registration bridge (M3.3b) that lets a real agent discover the server.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a, S1a.
 Full 4-tool MCP surface; branch + repo-root resolution centralized & cached; locks table has the
