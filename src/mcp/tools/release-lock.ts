@@ -1,8 +1,10 @@
+import { dirname } from "node:path";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { MeshLockDatabase } from "../../core/db.js";
 import type { Config } from "../../core/config.js";
 import { releaseLock } from "../../core/lock-engine.js";
+import { getRepoRoot } from "../../core/git.js";
 
 /**
  * Input shape for `release_lock`. Only `path` — release is branch-agnostic, so
@@ -24,12 +26,19 @@ export const releaseLockToolConfig = {
 /**
  * Build the `release_lock` handler bound to a database and the loaded config.
  * Config supplies session_id — release is ownership-scoped, so we only delete
- * locks held by the calling session. No git, no branch: releasing a path drops
- * all of this session's locks on it across every branch (decided in M3.2b).
+ * locks held by the calling session. Repo-scoped (repo_root resolved from the
+ * file's directory) but still branch-agnostic: releasing a path drops all of
+ * this session's locks on it across every branch in that repo (decided in M3.2b).
+ * Async because it resolves the repo before the delete.
  */
 export function makeReleaseLockHandler(db: MeshLockDatabase, config: Config) {
-  return ({ path }: { path: string }): CallToolResult => {
-    const released = releaseLock(db, { path, sessionId: config.session_id });
+  return async ({ path }: { path: string }): Promise<CallToolResult> => {
+    const repoRoot = await getRepoRoot(dirname(path));
+    const released = releaseLock(db, {
+      repoRoot,
+      path,
+      sessionId: config.session_id,
+    });
 
     const text = released
       ? `Released lock on "${path}".`

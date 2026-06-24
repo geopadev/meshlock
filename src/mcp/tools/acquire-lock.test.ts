@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
 import { acquireLock, type CrossBranchMode } from "../../core/lock-engine.js";
 import type { Config } from "../../core/config.js";
-import { clearBranchCache } from "../../core/git.js";
+import { clearBranchCache, getRepoRoot } from "../../core/git.js";
 import { makeAcquireLockHandler } from "./acquire-lock.js";
 
 // The tool now resolves the branch from process.cwd(). We chdir into a non-git
@@ -15,6 +15,9 @@ const ORIGINAL_CWD = process.cwd();
 
 let tempDir: string;
 let db: MeshLockDatabase;
+// The repo_root the handler resolves from each path's dir (cwd === tempDir here).
+// Seeds use the same value so they land in the repo the handler queries.
+let repoRoot: string;
 
 // The session the tool acts as (from config) and a different session we seed
 // conflicting locks under.
@@ -65,6 +68,7 @@ beforeEach(async () => {
   db = openDatabase(join(tempDir, "test.db"));
   process.chdir(tempDir);
   clearBranchCache();
+  repoRoot = await getRepoRoot(tempDir);
 });
 
 afterEach(async () => {
@@ -102,6 +106,7 @@ describe("acquire_lock handler", () => {
     const path = join(tempDir, "taken.ts");
     // Another session already holds this branchless lock.
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: OTHER_SESSION,
       mode: "exclusive",
@@ -121,6 +126,7 @@ describe("acquire_lock handler", () => {
     const path = join(tempDir, "cross.ts");
     // A lock on another branch held by another session.
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: OTHER_SESSION,
       mode: "exclusive",
@@ -141,6 +147,7 @@ describe("acquire_lock handler", () => {
   it("config cross_branch_mode 'warn' reaches the engine and acquires with a warning", async () => {
     const path = join(tempDir, "cross.ts");
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: OTHER_SESSION,
       mode: "exclusive",

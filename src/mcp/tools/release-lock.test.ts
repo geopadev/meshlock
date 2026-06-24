@@ -5,10 +5,13 @@ import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
 import { acquireLock } from "../../core/lock-engine.js";
 import type { Config } from "../../core/config.js";
+import { getRepoRoot } from "../../core/git.js";
 import { makeReleaseLockHandler } from "./release-lock.js";
 
 let tempDir: string;
 let db: MeshLockDatabase;
+// The repo_root the handler resolves from each path's dir (== tempDir here).
+let repoRoot: string;
 
 // The session the tool acts as (from config) and a different session we seed
 // other-owner locks under.
@@ -47,6 +50,7 @@ function rowCount(path: string): number {
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "meshlock-release-test-"));
   db = openDatabase(join(tempDir, "test.db"));
+  repoRoot = await getRepoRoot(tempDir);
 });
 
 afterEach(async () => {
@@ -58,6 +62,7 @@ describe("release_lock handler", () => {
   it("releases a lock the calling session owns", async () => {
     const path = join(tempDir, "mine.ts");
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: CONFIG_SESSION,
       mode: "exclusive",
@@ -75,6 +80,7 @@ describe("release_lock handler", () => {
   it("is a no-op on a lock owned by another session", async () => {
     const path = join(tempDir, "theirs.ts");
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: OTHER_SESSION,
       mode: "exclusive",
@@ -103,6 +109,7 @@ describe("release_lock handler", () => {
     const path = join(tempDir, "multi.ts");
     // Same session holds the same path on two different branches.
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: CONFIG_SESSION,
       mode: "exclusive",
@@ -110,6 +117,7 @@ describe("release_lock handler", () => {
       branch: "main",
     });
     acquireLock(db, {
+      repoRoot,
       path,
       sessionId: CONFIG_SESSION,
       mode: "exclusive",

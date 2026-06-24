@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { simpleGit } from "simple-git";
 import { getCurrentBranch, getRepoRoot, clearBranchCache } from "./git.js";
 
@@ -71,9 +71,10 @@ describe("getRepoRoot", () => {
     expect(await getRepoRoot(tempDir)).toBe(await realpath(tempDir));
   });
 
-  it("returns the directory's own absolute path (sentinel) when not a git repo", async () => {
+  it("returns the directory's own realpath (sentinel) when not a git repo", async () => {
     const root = await getRepoRoot(tempDir);
-    expect(root).toBe(resolve(tempDir));
+    // realpath-normalized to match git's --show-toplevel (handles /tmp symlinks).
+    expect(root).toBe(await realpath(tempDir));
     expect(root).not.toBe(""); // a real path, never null/empty
   });
 
@@ -90,8 +91,8 @@ describe("getRepoRoot", () => {
     await rm(join(tempDir, ".git"), { recursive: true, force: true });
     expect(await getRepoRoot(sub)).toBe(repoTop);
 
-    // After clearing, it re-resolves to the sentinel (sub's own absolute path).
+    // After clearing, it re-resolves to the sentinel (sub's own realpath).
     clearBranchCache();
-    expect(await getRepoRoot(sub)).toBe(resolve(sub));
+    expect(await getRepoRoot(sub)).toBe(await realpath(sub));
   });
 });
