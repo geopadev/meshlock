@@ -111,3 +111,54 @@ A: because branch can be null and null = null in sql is false so is makes it tru
 The cross-repo leak fails SILENTLY, not loudly — a forgotten repo_root in a WHERE reads other repos' rows with no error; the isolation test is what catches it (Q1)
 INSERT-omits-repo_root (throws, NOT NULL) vs WHERE-omits-repo_root (silent leak) are two different failure modes (Q1, Q3)
 NULL = NULL is unknown (not false); repo_root uses = only because it is a guaranteed non-null sentinel (Q5)
+
+---
+
+## S1c — thread repo_root through the MCP tools (+ realpath sentinel) (2026-06-24)
+
+**Built:** Closed the S1b forcing function — all four tools now resolve repo_root and pass it
+into the now-required engine param, so the tree compiles and the full suite is green again.
+The three per-path tools (acquire/release/check) resolve `getRepoRoot(dirname(path))` — repo
+membership depends on where the FILE lives. team_status, which has no single path, resolves
+`getRepoRoot()` (cwd, the daemon's repo), the same base it uses for the agent's branch, making
+it a per-repo survey via `listLocks(db, repoRoot)`. release_lock and check_lock became async
+(they now await getRepoRoot). git.ts's sentinel switched from `resolve(cwd)` to `realpath(cwd)`
+so a non-git "repo root" matches git's symlink-resolved --show-toplevel (with a resolve()
+fallback to keep the never-throws contract). Tests updated to seed locks under the same repo_root
+the handler resolves; git.test.ts sentinel assertions now expect realpath.
+
+This milestone deliberately spanned 9 files (architect-approved): the change is mechanical and
+uniform, and one prompt takes the tree from red to green rather than leaving it half-fixed.
+
+**Why this design:** acquire_lock holds the clearest illustration of the S1 idea — two resolution
+bases in one handler: repo_root from dirname(path) (per-file), branch from cwd (whole-repo). Same
+M3.2c lesson, both directions visible at once. team_status uses cwd because a survey isn't about
+one file; "what's locked in the repo I'm running in" is the right scope. The realpath sentinel
+closes the S1a gap where git's path (symlink-resolved) and the sentinel (not) could disagree and
+split one location into two repo_roots.
+
+**Concepts:** two resolution bases in one handler (dirname(path) vs cwd), per-path vs survey
+scoping, realpath vs resolve (symlink normalization to match git), sync→async handler conversion
+(awaiting I/O before the engine call), an intentional multi-file change to go red→green in one
+step, seeding tests against the same resolver the code uses.
+
+**Interview Qs:**
+Q: In acquire_lock, repo_root is resolved from dirname(path) but branch from cwd (getCurrentBranch()). Why the two different bases in the same handler?
+A: because getting the repo depends on where the file sits on the directory and getting the branch depends on the cwd of the daemon. (Correct. "Which repo owns this file?" is answered by where the file lives (dirname(path)); "what branch is the work on?" is a whole-repo property of the daemon's checkout (cwd). Same getXxx shape, different question, different input.)
+
+Q: team_status resolves repo_root from cwd (getRepoRoot() with no argument), not from a path like the other tools. Why is cwd the right base for this one tool?
+A: because team status gives the status of the current repo, it is on a per repo directory basis, it scopes to the daemons repo reporoot and current branch both default to cwd resulting in what's locked in this repo. (Correct. team_status has no single path to scope by, so it surveys the daemon's own repo — both repo_root and the branch marker default to cwd, giving "what's locked in this repo".)
+
+Q: The sentinel changed from resolve(cwd) to realpath(cwd). What concrete bug does realpath prevent, given git's --show-toplevel resolves symlinks?
+A: it resolves mac os symlinks. (Right mechanism, but name the consequence: git's --show-toplevel is already symlink-resolved, so a resolve()-based sentinel (NOT symlink-resolved) would DISAGREE with git's path for the same location. Since repo_root is part of lock identity, that splits one real directory into two different repo_root values → two distinct locks for the same place. realpath makes the sentinel match git, so one location = one repo_root.)
+
+Q: check_lock and release_lock had to become async in this milestone. What forced that, and where does the awaited work happen relative to the engine call?
+A: the await happens before the synchronous engine call so no async work ever sits inside the engine's begin immediate transaction, I am not sure about the why. (The WHERE is right. What forced it: the handlers now call `await getRepoRoot(...)`, and any function that awaits returns a Promise, so the handler becomes async. The WHY it must be before the engine call: better-sqlite3 is synchronous and acquireLock runs inside BEGIN IMMEDIATE, which holds the SQLite write lock. Awaiting the git subprocess INSIDE that transaction would hold the write lock open for the subprocess's whole unpredictable duration, blocking every other connection — so resolve first, then make the fast synchronous engine call.)
+
+Q: The tests seed locks by computing `getRepoRoot(dirname(path))` themselves and passing that as repoRoot, rather than hardcoding a path string. Why seed with the resolver instead of a literal?
+A: to get the correct path everytime instead of hardcoding. (Right. The sentinel's value (realpath of a temp dir) differs per machine/OS, so a hardcoded literal would be wrong somewhere. Computing it with the SAME resolver the handler uses guarantees the seed lands in exactly the repo the handler queries — a hermetic test that passes regardless of where it runs.)
+
+**Still fuzzy:**
+
+The realpath consequence, not just the mechanism — matching git's symlink-resolved path so one location yields ONE repo_root, not two distinct locks (Q3)
+Why the handlers became async: awaiting getRepoRoot makes the function return a Promise; and the await must precede the engine call so the BEGIN IMMEDIATE write lock isn't held across the git subprocess (Q4)
