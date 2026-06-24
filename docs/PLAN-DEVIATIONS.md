@@ -209,11 +209,9 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
   call). Sentinel now uses realpath (matches git's symlink-resolved --show-toplevel; resolve()
   fallback keeps never-throws). server.test.ts also updated (consumes now-async check handler).
   tsc clean, full pnpm test GREEN — 57 tests. Tree builds again. **S1 (repo scoping) COMPLETE.**
-  ⚠️ PENDING DECISION (S1c issue #1): acquire_lock resolves repo_root from dirname(path) but branch
-  from cwd — if the file is in a different repo than the daemon's cwd, the lock is incoherent (repo B
-  root, repo A branch). Fix options: (a) resolve branch from dirname(path) too [architect lean — makes
-  the lock coherent by construction, generalizes to multi-repo], or (b) reject out-of-repo locks.
-  AWAITING USER DECISION; fold into M3.3b or a small S1d.
+  ⚠️ RESOLVED (S1c issue #1): chose (a) — acquire_lock resolves branch from getCurrentBranch(dirname(path))
+  too, so repo_root and branch both come from the file's repo → lock is coherent by construction,
+  generalizes to multi-repo. One-line change. Folded into M3.3b (or applied as a tiny fix alongside it).
 
 **Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
 
@@ -259,8 +257,7 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 **Active milestone:** ✅ **S1 (repo scoping) COMPLETE** → 📋 **M3.3b next** (meshlock init +
 live JSON-RPC registration — the first demo-able / promotable moment). Then M3.5 (change briefing).
-PENDING: S1c issue #1 (acquire_lock two-bases coherence) — user to pick fix (a) or (b); fold into
-M3.3b or a small S1d.
+M3.3b also folds in the S1c-issue-#1 fix (a): acquire_lock branch from dirname(path) too.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
 S1a, S1b, S1c. Full 4-tool MCP surface, repo-scoped end to end, tree builds (57 tests green).
