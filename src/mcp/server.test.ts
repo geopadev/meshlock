@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../core/db.js";
 import { acquireLock } from "../core/lock-engine.js";
+import { getRepoRoot } from "../core/git.js";
 import { makeCheckLockHandler } from "./tools/check-lock.js";
 
 let tempDir: string;
@@ -31,23 +32,27 @@ function firstText(result: { content: Array<{ type: string; text?: string }> }):
 }
 
 describe("check_lock handler", () => {
-  it("reports a free path as free", () => {
+  it("reports a free path as free", async () => {
     const handler = makeCheckLockHandler(db);
-    const text = firstText(handler({ path: "/repo/unlocked.ts" }));
+    const text = firstText(await handler({ path: "/repo/unlocked.ts" }));
     expect(text).toContain("FREE");
     expect(text).toContain("/repo/unlocked.ts");
   });
 
-  it("reports a held path with the holding session", () => {
+  it("reports a held path with the holding session", async () => {
+    const path = "/repo/locked.ts";
+    // Seed with the same repo_root the handler will resolve from the path's dir.
+    const repoRoot = await getRepoRoot(dirname(path));
     acquireLock(db, {
-      path: "/repo/locked.ts",
+      repoRoot,
+      path,
       sessionId: SESSION,
       mode: "exclusive",
       timeoutSeconds: 1800,
     });
 
     const handler = makeCheckLockHandler(db);
-    const text = firstText(handler({ path: "/repo/locked.ts" }));
+    const text = firstText(await handler({ path }));
 
     expect(text).toContain("LOCKED");
     expect(text).toContain(SESSION);

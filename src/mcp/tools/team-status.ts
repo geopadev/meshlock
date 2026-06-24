@@ -2,7 +2,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { MeshLockDatabase } from "../../core/db.js";
 import type { Config } from "../../core/config.js";
 import { listLocks } from "../../core/lock-engine.js";
-import { getCurrentBranch } from "../../core/git.js";
+import { getCurrentBranch, getRepoRoot } from "../../core/git.js";
 
 /**
  * Input shape for `team_status`. None — the tool surveys every active lock. An
@@ -25,12 +25,17 @@ export const teamStatusToolConfig = {
  *
  * `config` is accepted for signature consistency with the other tool factories
  * (and forthcoming team-mode needs); team_status reads no config field today.
- * The handler is async because resolving the current branch is async.
+ * The handler is async because resolving the repo and branch is async.
+ *
+ * Unlike the per-path tools, team_status has no single path, so it scopes to the
+ * DAEMON's repo: getRepoRoot() and getCurrentBranch() both default to cwd. The
+ * result is a per-repo survey ("what's locked in this repo").
  */
 export function makeTeamStatusHandler(db: MeshLockDatabase, config: Config) {
   void config;
   return async (): Promise<CallToolResult> => {
-    const locks = listLocks(db);
+    const repoRoot = await getRepoRoot();
+    const locks = listLocks(db, repoRoot);
     const currentBranch = await getCurrentBranch();
 
     if (locks.length === 0) {

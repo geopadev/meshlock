@@ -1,3 +1,4 @@
+import { realpath } from "node:fs/promises";
 import { resolve } from "node:path";
 import { simpleGit } from "simple-git";
 
@@ -73,10 +74,12 @@ async function resolveBranch(cwd: string): Promise<string | null> {
  * directory, since repo membership is a property of where the file lives).
  *
  * Unlike {@link getCurrentBranch}, this returns a non-null SENTINEL: when `cwd`
- * is not inside a git repo (or any git error), it returns the absolute path of
- * `cwd` itself. A non-git file's "repo root" is just its own directory. This
- * keeps repo_root out of the NULL-uniqueness trap — it is always a real string,
- * so a UNIQUE(repo_root, ...) constraint behaves normally. NEVER throws.
+ * is not inside a git repo (or any git error), it returns `cwd`'s own path,
+ * realpath-normalized so it matches git's symlink-resolved --show-toplevel (e.g.
+ * macOS /tmp -> /private/tmp). A non-git file's "repo root" is just its own
+ * directory. This keeps repo_root out of the NULL-uniqueness trap — it is always
+ * a real string, so a UNIQUE(repo_root, ...) constraint behaves normally. NEVER
+ * throws.
  *
  * Cached per cwd for {@link BRANCH_CACHE_TTL_MS}, like branch resolution.
  */
@@ -96,9 +99,16 @@ async function resolveRepoRoot(cwd: string): Promise<string> {
     const root = (
       await simpleGit(cwd).revparse(["--show-toplevel"])
     ).trim();
-    return root === "" ? resolve(cwd) : root;
+    if (root !== "") return root;
   } catch {
-    // Not a git repo (or git unavailable): the file's own directory is its scope.
+    // Not a git repo (or git unavailable): fall through to the sentinel.
+  }
+  // Sentinel: the directory's own path, realpath-normalized to match git's
+  // symlink-resolved output. realpath throws if the path doesn't exist, so fall
+  // back to resolve() to keep the never-throws contract.
+  try {
+    return await realpath(cwd);
+  } catch {
     return resolve(cwd);
   }
 }

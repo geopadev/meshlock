@@ -1,9 +1,10 @@
+import { dirname } from "node:path";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { MeshLockDatabase } from "../../core/db.js";
 import type { Config } from "../../core/config.js";
 import { acquireLock } from "../../core/lock-engine.js";
-import { getCurrentBranch } from "../../core/git.js";
+import { getCurrentBranch, getRepoRoot } from "../../core/git.js";
 
 /**
  * Input shape for `acquire_lock`. Only `path` — the tool resolves the git branch
@@ -27,15 +28,20 @@ export const acquireLockToolConfig = {
  * Config supplies session_id / lock_mode / lock_timeout / cross_branch_mode so
  * the handler never re-reads config per call. The handler is async because
  * resolving the branch is async — but that git I/O happens BEFORE the
- * synchronous engine call, never inside its transaction. The branch comes from
- * the daemon's repository (getCurrentBranch defaults to process.cwd()), since a
- * branch is a property of the repo, not of the individual file being locked.
+ * synchronous engine call, never inside its transaction.
+ *
+ * Two DIFFERENT resolution bases here, on purpose: repo_root comes from the
+ * FILE's directory (dirname(path)) because repo membership depends on where the
+ * file lives, while the branch comes from the daemon's cwd (getCurrentBranch
+ * defaults to process.cwd()) because a branch is a whole-repo property.
  */
 export function makeAcquireLockHandler(db: MeshLockDatabase, config: Config) {
   return async ({ path }: { path: string }): Promise<CallToolResult> => {
     const branch = await getCurrentBranch();
+    const repoRoot = await getRepoRoot(dirname(path));
 
     const result = acquireLock(db, {
+      repoRoot,
       path,
       sessionId: config.session_id,
       mode: config.lock_mode,

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
 import { acquireLock } from "../../core/lock-engine.js";
 import type { Config } from "../../core/config.js";
-import { clearBranchCache } from "../../core/git.js";
+import { clearBranchCache, getRepoRoot } from "../../core/git.js";
 import { makeTeamStatusHandler } from "./team-status.js";
 
 // team_status resolves the agent's branch from process.cwd(). We chdir into a
@@ -14,6 +14,9 @@ const ORIGINAL_CWD = process.cwd();
 
 let tempDir: string;
 let db: MeshLockDatabase;
+// The repo_root the handler resolves from cwd (== tempDir after chdir). Seeds use
+// the same value so the per-repo survey returns them.
+let repoRoot: string;
 
 const SESSION_A = "88888888-8888-4888-8888-888888888888";
 const SESSION_B = "99999999-9999-4999-8999-999999999999";
@@ -51,6 +54,7 @@ beforeEach(async () => {
   db = openDatabase(join(tempDir, "test.db"));
   process.chdir(tempDir);
   clearBranchCache();
+  repoRoot = await getRepoRoot();
 });
 
 afterEach(async () => {
@@ -68,6 +72,7 @@ describe("team_status handler", () => {
 
   it("lists every active lock with path, branch, and holder", async () => {
     acquireLock(db, {
+      repoRoot,
       path: join(tempDir, "a.ts"),
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -75,6 +80,7 @@ describe("team_status handler", () => {
       branch: "main",
     });
     acquireLock(db, {
+      repoRoot,
       path: join(tempDir, "b.ts"),
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -82,6 +88,7 @@ describe("team_status handler", () => {
       branch: null,
     });
     acquireLock(db, {
+      repoRoot,
       path: join(tempDir, "c.ts"),
       sessionId: SESSION_A,
       mode: "exclusive",
@@ -108,6 +115,7 @@ describe("team_status handler", () => {
     const branchlessPath = join(tempDir, "mine.ts");
     const namedPath = join(tempDir, "theirs.ts");
     acquireLock(db, {
+      repoRoot,
       path: branchlessPath,
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -115,6 +123,7 @@ describe("team_status handler", () => {
       branch: null,
     });
     acquireLock(db, {
+      repoRoot,
       path: namedPath,
       sessionId: SESSION_B,
       mode: "exclusive",
@@ -135,9 +144,10 @@ describe("team_status handler", () => {
     const expiredPath = join(tempDir, "stale.ts");
     // Seed a row that already expired, bypassing acquireLock's future expiry.
     db.prepare(
-      `INSERT INTO locks (path, session_id, mode, acquired_at, expires_at, branch)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     ).run(
+      repoRoot,
       expiredPath,
       SESSION_B,
       "exclusive",
