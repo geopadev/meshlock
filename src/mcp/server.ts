@@ -46,13 +46,14 @@ export function createServer(db: MeshLockDatabase, config: Config): McpServer {
 }
 
 /**
- * Boot: open the DB once, build the server, connect stdio.
+ * Boot: open the DB once, build the server, connect stdio. Exported so the CLI
+ * (`meshlock serve`) can reuse the exact same boot path; behavior is unchanged.
  *
  * stdout is the MCP protocol channel and MUST stay clean — any JSON written
  * there that isn't a protocol message will corrupt the stream. All diagnostics
  * therefore go to stderr (console.error), never console.log.
  */
-async function main(): Promise<void> {
+export async function startServer(): Promise<void> {
   const db = openDatabase(getDatabasePath());
   const config = await loadConfig();
   const server = createServer(db, config);
@@ -64,7 +65,7 @@ async function main(): Promise<void> {
 
 // Run only when executed directly, so importing this module in tests is a no-op.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((err) => {
+  startServer().catch((err) => {
     console.error("meshlock MCP server failed to start:", err);
     process.exit(1);
   });

@@ -7,6 +7,9 @@
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "meshlock": "./dist/cli/index.js"
+  },
   "scripts": {
     "build": "tsc",
     "test": "vitest run"
