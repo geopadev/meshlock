@@ -20,16 +20,19 @@ function usage(): string {
 }
 
 /**
- * Build the registration entry that launches THIS CLI's `serve` path. We use the
- * exact node binary running init (process.execPath) and an absolute path to this
- * compiled entry, so the registered command does not depend on PATH or cwd, and
- * works whether or not `meshlock` is globally linked.
+ * Build the registration entry that launches THIS CLI's `serve` path. `command`
+ * is the PATH-relative "node" (not process.execPath): a pinned nvm-style path
+ * like .../v22.x/bin/node vanishes on a Node upgrade and SILENTLY un-registers
+ * meshlock. "node" resolves via PATH and survives upgrades. Its tradeoff (the
+ * wrong node first on PATH) is a rare, LOUD failure — serve visibly won't start
+ * — which is preferable to a silent disappearance. `args` keeps the absolute
+ * path to this compiled entry, so the script location doesn't depend on cwd.
  */
 function meshlockServerEntry(): StdioServerEntry {
   const selfPath = fileURLToPath(import.meta.url);
   return {
     type: "stdio",
-    command: process.execPath,
+    command: "node",
     args: [selfPath, "serve"],
     env: {},
   };
