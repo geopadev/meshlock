@@ -30,14 +30,21 @@ export const acquireLockToolConfig = {
  * resolving the branch is async — but that git I/O happens BEFORE the
  * synchronous engine call, never inside its transaction.
  *
- * Two DIFFERENT resolution bases here, on purpose: repo_root comes from the
- * FILE's directory (dirname(path)) because repo membership depends on where the
- * file lives, while the branch comes from the daemon's cwd (getCurrentBranch
- * defaults to process.cwd()) because a branch is a whole-repo property.
+ * Both repo_root AND branch resolve from the FILE's directory (dirname(path)):
+ * repo membership and the branch of that repo both depend on where the file
+ * lives. Resolving the branch from the file's own repo — not the daemon's cwd —
+ * keeps the lock coherent even when the file is in a different repo than the
+ * daemon is running in (the S1c-issue-#1 fix).
+ *
+ * NOTE: M3.2c moved this from dirname(path) to cwd; S1c moves it back. Not a
+ * flip-flop — getCurrentBranch(dirname(path)) still resolves the whole repo's
+ * HEAD (git walks up), and once `meshlock init` made the daemon user-global,
+ * cwd points at the DAEMON's repo, not the file's. See the M3.3b learning-log
+ * "reconciling with M3.2c" note.
  */
 export function makeAcquireLockHandler(db: MeshLockDatabase, config: Config) {
   return async ({ path }: { path: string }): Promise<CallToolResult> => {
-    const branch = await getCurrentBranch();
+    const branch = await getCurrentBranch(dirname(path));
     const repoRoot = await getRepoRoot(dirname(path));
 
     const result = acquireLock(db, {
