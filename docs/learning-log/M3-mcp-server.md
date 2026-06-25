@@ -360,3 +360,55 @@ back to the file's directory. Same line of code, opposite justification.
 
 The bin field's role (maps the command name to the file) vs the shebang's role (run that file with node) — two separate mechanisms (Q2)
 Why branch resolution flipped cwd → dirname(path) between M3.2c and S1c — the daemon going user-global changed which repo cwd points at (reconciliation note)
+
+---
+
+## M3.3c (automated half) — command:"node" + synthetic registration test (2026-06-25)
+
+**Built:** Two small things closing M3.3b loose ends. (1) The registration entry's `command` changed
+from process.execPath (the exact, version-pinned node binary) to the PATH-relative "node", so a Node
+upgrade doesn't silently un-register meshlock. (2) A synthetic registration test in server.test.ts
+that proves createServer registers ALL FOUR tools and they're discoverable — closing the gap, carried
+since M3.2, where nothing tested createServer's registerTool wiring. The live exercise (real Claude
+Code + agent + JSON-RPC) is the user's manual step. 62 tests green.
+
+**SDK mechanism used:** InMemoryTransport.createLinkedPair() (from @modelcontextprotocol/sdk/inMemory.js)
+plus a Client (from .../client/index.js). The pair links a client transport and a server transport
+in memory; the McpServer connects to one end, the Client to the other, and client.listTools() issues a
+REAL tools/list request over that in-memory channel. So the test exercises the actual protocol path —
+registration → tools/list — with no child process and no stdio. I verified the API by inspecting the
+installed SDK and smoke-testing the round-trip before writing the test. (No fallback/introspection
+hack was needed.)
+
+**Why this design:** "node" trades a silent failure (pinned path vanishes on upgrade → tools quietly
+disappear) for a rare LOUD one (wrong node first on PATH → serve visibly fails) — loud-and-rare beats
+silent. The synthetic test catches a class of bug no handler test can: a tool that exists and works in
+isolation but was never wired into server.ts via registerTool (or was registered under the wrong name).
+Handler tests call the handler factory directly, bypassing the server entirely, so they'd stay green
+while the tool is invisible to agents. A child-process stdio server was avoided because it's slow,
+flaky, and platform-dependent; the in-memory linked pair gives the same protocol round-trip in-process.
+
+**Concepts:** PATH-relative vs pinned-binary command (silent vs loud failure modes), an in-memory
+linked transport as a real-protocol test without a subprocess, what registration tests catch that
+handler tests can't (the wiring, not the logic), set equality for order-independent assertions,
+verifying a library's API by inspection + smoke test before depending on it.
+
+**Interview Qs:**
+Q: The registration command changed from process.execPath to "node". What failure mode does each have, and why is "node" the better default?
+A: if the user changes node versions the mcp would get removed silently, with command node it gets the nodes path and if it is wrong it fails loudly. (Correct. process.execPath pins an exact (e.g. nvm) binary that vanishes on a Node upgrade → meshlock silently un-registers. "node" resolves via PATH and survives upgrades; if the wrong node is first on PATH it fails loudly — a rare, visible failure beats a silent one.)
+
+Q: The new test connects a Client to the server over an in-memory linked transport and calls listTools(). What bug does this catch that the handler-level tests (which call the handler factory directly) cannot?
+A: you get the genuine handshake without spawning anything. (That describes the transport, not the bug. The bug it catches: a tool that is implemented and works in isolation but was never wired into server.ts via registerTool — or was registered under the wrong name. Handler tests call the factory directly, bypassing the server, so the tool could be invisible to agents and they'd still pass. This test goes THROUGH createServer, so it's the only one that sees the registration wiring.)
+
+Q: Why use an in-memory linked transport instead of spawning a real `meshlock serve` child process and talking to it over stdio?
+A: because it is more real than calling internals directly, far cheaper and more reliable than a child process. (Correct. The linked pair gives the same protocol round-trip (initialize → tools/list) without process startup, stdio piping, platform quirks, or cleanup flakiness — fast and deterministic, while still exercising the real protocol path.)
+
+Q: The assertion sorts the tool names and compares to a 4-element array. Why sort / compare the whole set instead of just asserting each expected name is present?
+A: because a user can pass in a non existing tool and it would pass without error, whereas when we use toequal it is more strict. (Right direction. Full-set equality pins the EXACT surface: it catches both a missing tool AND an unexpected/duplicate/extra one. "Contains each of the four" would still pass if a broken fifth tool were also registered. Sorting just makes it order-independent.)
+
+Q: Before writing the test, the SDK's API was checked by inspecting node_modules and running a smoke test. Why verify a dependency's API that way rather than assuming the method names?
+A: because dependancies drift with version changes. (Correct. Library APIs change across versions, and a wrong guess fails as a confusing error rather than a clear "no such method". Confirming against the actually-installed version turns assumptions into facts — same reason M3.3b verified Claude Code's real config schema.)
+
+**Still fuzzy:**
+
+What the registration test actually catches — a tool implemented but never wired into server.ts via registerTool (or mis-named); handler tests bypass the server so they can't see it (Q2)
