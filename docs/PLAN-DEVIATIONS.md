@@ -217,10 +217,21 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
 
 ---
 
-- 📋 **M3.3b [architect-invented]:** `meshlock init` (write MCP server registration into Claude Code
-  config) + the live-agent-over-JSON-RPC moment. NOT YET BUILT. This is where the live registration
-  test (open since M3.2, spans all 4 tools) finally gets solved — registering + watching real
-  JSON-RPC IS the test. First demo-able / promotable moment.
+- ✅ **M3.3b [architect-invented]:** `meshlock init` MACHINERY. CLI dispatcher (src/cli/index.ts,
+  shebang) — `init` registers, `serve`/bare boots the server, unknown → usage on stderr. package.json
+  `bin` maps meshlock → dist/cli/index.js. startServer() extracted+exported from server.ts (one boot
+  path, unchanged). registerMeshlock() does READ-MERGE-WRITE on ~/.claude.json top-level mcpServers
+  (preserves other servers + top-level keys, idempotent, refuses to overwrite unparseable config,
+  injectable path for tests). S1c-issue-#1 fix applied: acquire_lock branch now getCurrentBranch(dirname(path)).
+  Config format VERIFIED live (not assumed) against Claude Code v2.1.185. 61 tests. Reconciled the
+  M3.2c branch-base apparent-flip-flop (premise changed: daemon went user-global, so cwd ≠ file's repo).
+  ⚠️ PENDING DECISION (M3.3b issue #1): registration command uses process.execPath (exact node binary)
+  — robust vs PATH but BRITTLE across nvm Node upgrades (exact path vanishes → meshlock silently
+  disappears from Claude Code). Options: command:"node" (PATH-relative, survives upgrades [architect
+  lean]) vs keep exact-binary (re-init after upgrades). USER TO DECIDE; one-line fix, fold into M3.3c.
+- 📋 **M3.3c [architect-invented]:** the LIVE exercise (manual) — register in real Claude Code, run an
+  agent, watch real JSON-RPC tool calls. Plus the synthetic registration test (boot createServer,
+  tools/list, assert 4 tools). Closes the live-registration gap open since M3.2. FIRST DEMO-ABLE MOMENT.
 
 **Why split:** four tools + init registration far exceeds the 6-file cap and mixes concerns;
 `check_lock` first (read-only) de-risks the transport/registration plumbing before any
@@ -255,9 +266,14 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ **S1 (repo scoping) COMPLETE** → 📋 **M3.3b next** (meshlock init +
-live JSON-RPC registration — the first demo-able / promotable moment). Then M3.5 (change briefing).
-M3.3b also folds in the S1c-issue-#1 fix (a): acquire_lock branch from dirname(path) too.
+**Active milestone:** ✅ M3.3b accepted (init machinery) → 📋 **M3.3c next** (LIVE registration —
+the demo-able moment) + synthetic registration test. Then M3.5 (change briefing — the differentiator).
+PENDING: M3.3b issue #1 (process.execPath vs command:"node") — user to decide; fold into M3.3c.
+
+**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c, M3.3b. Full 4-tool MCP surface, repo-scoped end to end, `meshlock` is now a runnable
+command that self-registers into Claude Code. 61 tests green. One step (M3.3c, live) from a real
+agent calling the tools.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
 S1a, S1b, S1c. Full 4-tool MCP surface, repo-scoped end to end, tree builds (57 tests green).
