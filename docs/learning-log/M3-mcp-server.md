@@ -218,6 +218,10 @@ clearing module-level state between tests.
 **Interview Qs:**
 Q: Why resolve the branch from process.cwd() (the repo) instead of dirname(path) (the locked file's directory)? What was actually wrong with the old base?
 A: because the root is supposed to be from the daemons current directory, not the path of each file independently. (Correct. A branch is a property of the whole repository — one HEAD — not of any individual file's directory, so the repo root (the daemon's cwd) is the right base. dirname(path) could also point somewhere that resolves the wrong repo or null.)
+> SUPERSEDED in S1c (see M3.3b "Note — reconciling with M3.2c"): this answer held while the
+> daemon ran per-repo (cwd == the file's repo). Once `meshlock init` made the daemon
+> user-global (one server, many repos), cwd became the DAEMON's repo, not the file's — so the
+> correct base flipped back to dirname(path), which resolves the FILE's repo's branch.
 
 Q: The cache has a 5-second TTL. Describe the two things that TTL is balancing — what gets worse if it were 0ms, and what gets worse if it were 1 hour?
 A: it balances staleness and slowness at 0 ms slowness and at 1 hour staleness. (Correct. 0ms → a git subprocess on every call (slow); 1 hour → a branch switch wouldn't be noticed for an hour (stale). 5s is the middle ground.)
@@ -284,3 +288,75 @@ A: It tells the compiler that we meant to leave it empty so it doesn't throw any
 
 Layer direction — core/the engine is the LOWER/inner layer the tool calls down into, not "higher" (Q4)
 Why team_status is team-wide for free — the relay writes other sessions' rows into the same locks table the tool already reads (Q4)
+
+---
+
+## M3.3b — meshlock init: CLI + user-global registration (+ S1c fix) (2026-06-25)
+
+**Built:** Made `meshlock` a runnable command. A small CLI dispatcher (src/cli/index.ts, the
+package's `bin` target with a `#!/usr/bin/env node` shebang) reads process.argv: `init` registers
+the MCP server in Claude Code's user config; `serve` (and bare `meshlock`) boots the server via a
+newly-exported `startServer()` reused from src/mcp/server.ts; an unknown command prints usage to
+stderr and exits non-zero. The registration logic (src/cli/init.ts, `registerMeshlock(configPath,
+entry)`) is READ-MERGE-WRITE: it preserves all existing config, adds/replaces only the `meshlock`
+entry (idempotent), creates the file/parent dirs if missing, and REFUSES to overwrite a config it
+can't parse. The S1c coherence fix landed too: acquire_lock now resolves branch from
+getCurrentBranch(dirname(path)) — same base as repo_root — so a lock is coherent even for a file
+outside the daemon's cwd. 4 init tests (fresh, merge, idempotent, unparseable). 61 tests green.
+
+**Verified config format (not assumed):** Claude Code v2.1.185 stores stdio MCP servers as
+`{ "type": "stdio", "command": "node", "args": [...], "env": {} }` keyed by name under `mcpServers`.
+For USER scope that's the TOP-LEVEL mcpServers of ~/.claude.json (local scope nests under
+projects[cwd]; project scope uses .mcp.json). Confirmed by a reversible `claude mcp add`/read/remove
+probe. Launch command chosen: process.execPath (exact node) + absolute path to the built CLI entry,
+so registration doesn't depend on PATH or on `meshlock` being globally linked.
+
+**Why this design:** READ-MERGE-WRITE (not overwrite) because the config is shared — clobbering it
+would delete the user's other MCP servers and unrelated settings. Refusing to write over an
+unparseable file follows the same fail-loud-on-identity principle as S1b: better to stop than to
+destroy a file we don't understand. Exporting startServer() (rather than duplicating the boot in the
+CLI) keeps one boot path, so `serve` and direct execution can't drift. The bin field + shebang are
+what turn a .js file into an invokable command.
+
+**Concepts:** a CLI bin entry + shebang (how a script becomes a command), process.argv dispatch
+without a framework, read-merge-write vs overwrite (preserving shared config), idempotency (replace,
+don't duplicate), fail-loud on unparseable input, dependency-injected config path for tests,
+reusing one exported boot function, stdout discipline (serve owns it, init may use it).
+
+**Interview Qs:**
+Q: `init` does read-merge-write instead of just writing the meshlock entry. What would break if it simply wrote `{ mcpServers: { meshlock: ... } }` to the file?
+A: it would erase all current mcp servers and just write meshlock over them. (Correct. ~/.claude.json is shared — it holds the user's other MCP servers AND dozens of unrelated settings. Overwriting it would delete all of that; read-merge-write touches only the meshlock key.)
+
+Q: What does the `bin` field in package.json do, and why does the CLI file need the `#!/usr/bin/env node` shebang as its first line?
+A: it tells the os to run this files with node, without the shebang the os wouldn't know it is a node script. (Right on the shebang. The other half: the `bin` field maps the command name `meshlock` to the file (./dist/cli/index.js), so on install npm/pnpm creates a `meshlock` launcher on PATH that points at it. bin = "make this file the `meshlock` command"; shebang = "run that file with node".)
+
+Q: Running `meshlock init` twice must not create two meshlock entries. What property is that called, and what in the code guarantees it?
+A: it is going to be idempotent and the = entry guarantees it, it will tell us if it replaced or wrote. (Correct. The property is idempotency. Assigning to an object KEY (servers["meshlock"] = entry) replaces in place — it can't duplicate, unlike pushing to an array. The created/replaced flags just report which happened.)
+
+Q: If the existing config file contains invalid JSON, init throws and does NOT write. Why is refusing better than starting fresh and overwriting it?
+A: because it would destroy a file the user cares about. (Correct. The file may be valid and our parser hit an edge case, or the user is mid-edit — either way, silently overwriting destroys data we didn't understand. Fail loud, same principle as S1b dropping the DB default.)
+
+Q: The S1c fix changed acquire_lock to resolve branch from getCurrentBranch(dirname(path)) instead of cwd. What concrete bug does resolving both repo_root and branch from the file's directory prevent?
+A: switching repos but staying on the previous repos branch or vice versa because previously they didn't get the path from the same source of truth. (Correct. With repo_root from the file's dir but branch from cwd, a file outside the daemon's repo would be tagged with repo B's root and repo A's branch — an incoherent lock. Resolving both from dirname(path) means one git starting directory → one repo → coherent.)
+
+**Note — reconciling with M3.2c (why branch went back to dirname(path)):**
+M3.2c moved branch resolution from dirname(path) to cwd, and its log called dirname(path) "wrong".
+S1c moves it back. This is NOT a flip-flop — the premise changed underneath it:
+- getCurrentBranch(dirname(path)) still resolves a WHOLE-repo branch: git walks up from that
+  directory to the nearest .git and reports that repo's single HEAD. It never treated branch as a
+  per-file property — so M3.2c's actual concern is still honored. The only question was ever
+  WHICH repo's branch.
+- M3.2c chose cwd under an unstated assumption: the daemon ran per-repo, so cwd == the file's repo
+  and the two bases were equivalent. M3.3b's `meshlock init` registers the server USER-GLOBALLY —
+  one daemon, many repos — so cwd (the daemon's repo) and dirname(path) (the file's repo) can now
+  DIFFER. cwd became the wrong base; dirname(path) is the file's own repo, which is what a lock
+  about that file should record.
+- Resolving repo_root AND branch from the same dirname(path) guarantees they describe the same
+  repo (coherent by construction). That is the S1c-issue-#1 fix.
+So: M3.2c was correct for a per-repo daemon; S1 made the daemon global, flipping the correct base
+back to the file's directory. Same line of code, opposite justification.
+
+**Still fuzzy:**
+
+The bin field's role (maps the command name to the file) vs the shebang's role (run that file with node) — two separate mechanisms (Q2)
+Why branch resolution flipped cwd → dirname(path) between M3.2c and S1c — the daemon going user-global changed which repo cwd points at (reconciliation note)
