@@ -38,3 +38,7 @@
 - Structured (JSON) team_status output variant alongside the human-readable text,
   for reliable machine consumption by agents that act programmatically. Decide if
   consumers want machine-readable status once there's real usage.
+- acquire_lock denial message: include the lock's EXPIRY time, not just the holding
+  session. A blocked agent wants to know "until when" to decide whether to wait or
+  back off. (Surfaced in live stress test A — denial names the holder + gives guidance
+  but not the expiry.) Small UX win.
