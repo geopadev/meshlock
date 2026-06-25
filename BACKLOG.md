@@ -1,5 +1,21 @@
 # Backlog — ideas to revisit after September 6
 
+## Agent identity model — OPEN QUESTION (surfaced by live stress test B, 2026-06-23)
+Today session_id is per-config (one id in ~/.meshlock/config.json). Live test B showed that
+Claude Code SUBAGENTS inherit the parent's single config session_id, so three concurrent
+subagents acquiring the same path all "succeed" — the engine correctly sees them as ONE session
+refreshing its own lock (DELETE-then-INSERT on (repo_root, path, session_id); one row results).
+This is CORRECT for the solo model (one human + one Claude) and is NOT a bug — the DB serialized
+fine (BEGIN IMMEDIATE held; exactly one row), and same-session refresh is intended M3.2 behavior.
+
+But it means independent concurrent callers are invisible to each other under a shared session_id.
+The deeper question — "where does an agent's identity come from?" — is foundational for M8 (team
+relay): team mode needs identity per-agent/per-developer, not per-config. Options to decide at M8
+(NOT now): (a) keep session_id per-config [current, fine for solo]; (b) inject session_id per call
+so each agent/subagent is distinct; (c) per-init-context identity. Defer to M8 where the full
+team-mode context makes the right choice clear. Logged so M8 doesn't rediscover it cold.
+
+## Phase-2 / post-September
 - AgentMesh full hub (prompt engine, pipeline tools, multi-team)
 - MeshLearn (learning-as-you-build product)
 - meshlock-cloud: hosted relay, billing, seat enforcement
