@@ -228,9 +228,27 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
   ⚠️ RESOLVED (M3.3b issue #1): chose `command: "node"` (PATH-relative) over process.execPath —
   survives nvm Node upgrades (exact-binary path would vanish → silent un-registration). Assumes the
   right node is first on PATH (rare + loud failure if not). One-line change, folded into M3.3c.
-- 📋 **M3.3c [architect-invented]:** the LIVE exercise (manual) — register in real Claude Code, run an
-  agent, watch real JSON-RPC tool calls. Plus the synthetic registration test (boot createServer,
-  tools/list, assert 4 tools). Closes the live-registration gap open since M3.2. FIRST DEMO-ABLE MOMENT.
+- 🔨 **M3.3c [architect-invented]:** two halves.
+  - ✅ AUTOMATED half DONE: command:"node" fix applied; synthetic registration test added — real
+    Client + InMemoryTransport.createLinkedPair() + listTools() round-trip through createServer,
+    asserts exactly the 4 tool names (catches a tool that works in isolation but isn't registered).
+    Closes the createServer-wiring test gap open since M3.2. 62 tests.
+  - ✅ LIVE half DONE (2026-06-23): registered in real Claude Code, agent ran the FULL lifecycle over
+    live JSON-RPC — check_lock (FREE) → acquire_lock (branch main, repo_root resolved) → team_status
+    (marked "← your branch", M3.3a firing live) → release_lock. Verified independently via sqlite3:
+    lock row written by the agent (repo_root=/home/george/projects/meshlock, path, branch=main, session,
+    expiry), then EMPTY after release. command:"node" resolved correctly in WSL/nvm (the spawn risk did
+    NOT materialize). Validated together: S1 repo-scoping, M2.5 branch-awareness, M3.3a own-branch mark,
+    M3.3b read-merge-write registration, full 4-tool surface. **M3 (MCP server) COMPLETE.** First
+    demo-able moment reached — promotion now unblocked.
+  - ✅ LIVE STRESS TEST A (2026-06-23): two separate Claude Code sessions (distinct session_ids),
+    same path. T1 acquired src/core/lock-engine.ts (session fe0be975…). T2 acquire DENIED with a clean,
+    informative message naming the holder + guidance ("Could not acquire … LOCKED by session fe0be975…
+    Back off and retry later, or coordinate"). sqlite3 confirmed exactly ONE row (T2 neither duplicated
+    nor overwrote). After release, T2 re-acquired successfully → full hand-off proven. Cross-session
+    conflict path validated live. NOTE: denial names session + gives guidance (strength) but not the
+    expiry time — minor UX gap. The "what's being changed" gap is M3.5. Test B (subagent same-session
+    refresh / session-id discovery) NOT yet run.
 
 **Why split:** four tools + init registration far exceeds the 6-file cap and mixes concerns;
 `check_lock` first (read-only) de-risks the transport/registration plumbing before any
@@ -265,8 +283,14 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ M3.3b accepted (init machinery) → 📋 **M3.3c next** (LIVE registration —
-the demo-able moment) + synthetic registration test + the command:"node" fix. Then M3.5 (change briefing).
+**Active milestone:** ✅ **M3 (MCP server) COMPLETE** — full 4-tool surface registered and proven
+live (agent ran check→acquire→status→release over real JSON-RPC, verified in the DB). → 📋 **M3.5 next**
+(change briefing — THE differentiator: record what changed on release, brief the next agent on acquire).
+First demo-able moment reached; promotion unblocked (30-60s build-in-public clip, NOT a Show HN yet).
+
+**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c, M3.3b, M3.3c. The cooperation path is real: meshlock self-registers into Claude Code,
+and a live agent coordinates file locks (repo-scoped, branch-aware) through the four tools. 62 tests.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
 S1a, S1b, S1c, M3.3b. Full 4-tool MCP surface, repo-scoped end to end, `meshlock` is now a runnable
