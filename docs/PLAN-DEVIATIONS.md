@@ -225,10 +225,9 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
   injectable path for tests). S1c-issue-#1 fix applied: acquire_lock branch now getCurrentBranch(dirname(path)).
   Config format VERIFIED live (not assumed) against Claude Code v2.1.185. 61 tests. Reconciled the
   M3.2c branch-base apparent-flip-flop (premise changed: daemon went user-global, so cwd ≠ file's repo).
-  ⚠️ PENDING DECISION (M3.3b issue #1): registration command uses process.execPath (exact node binary)
-  — robust vs PATH but BRITTLE across nvm Node upgrades (exact path vanishes → meshlock silently
-  disappears from Claude Code). Options: command:"node" (PATH-relative, survives upgrades [architect
-  lean]) vs keep exact-binary (re-init after upgrades). USER TO DECIDE; one-line fix, fold into M3.3c.
+  ⚠️ RESOLVED (M3.3b issue #1): chose `command: "node"` (PATH-relative) over process.execPath —
+  survives nvm Node upgrades (exact-binary path would vanish → silent un-registration). Assumes the
+  right node is first on PATH (rare + loud failure if not). One-line change, folded into M3.3c.
 - 📋 **M3.3c [architect-invented]:** the LIVE exercise (manual) — register in real Claude Code, run an
   agent, watch real JSON-RPC tool calls. Plus the synthetic registration test (boot createServer,
   tools/list, assert 4 tools). Closes the live-registration gap open since M3.2. FIRST DEMO-ABLE MOMENT.
@@ -267,8 +266,7 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 ## Current position
 
 **Active milestone:** ✅ M3.3b accepted (init machinery) → 📋 **M3.3c next** (LIVE registration —
-the demo-able moment) + synthetic registration test. Then M3.5 (change briefing — the differentiator).
-PENDING: M3.3b issue #1 (process.execPath vs command:"node") — user to decide; fold into M3.3c.
+the demo-able moment) + synthetic registration test + the command:"node" fix. Then M3.5 (change briefing).
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
 S1a, S1b, S1c, M3.3b. Full 4-tool MCP surface, repo-scoped end to end, `meshlock` is now a runnable
