@@ -247,8 +247,15 @@ slotted before `meshlock init` in build order without disturbing the M-numbering
     Back off and retry later, or coordinate"). sqlite3 confirmed exactly ONE row (T2 neither duplicated
     nor overwrote). After release, T2 re-acquired successfully → full hand-off proven. Cross-session
     conflict path validated live. NOTE: denial names session + gives guidance (strength) but not the
-    expiry time — minor UX gap. The "what's being changed" gap is M3.5. Test B (subagent same-session
-    refresh / session-id discovery) NOT yet run.
+    expiry time — minor UX gap. The "what's being changed" gap is M3.5.
+  - ✅ LIVE STRESS TEST B (2026-06-23): three parallel Claude Code SUBAGENTS acquired the same path.
+    All three returned "Acquired"; sqlite3 showed exactly ONE row. CORRECT, NOT a bug: subagents inherit
+    the parent's single config session_id, so the engine saw one session refreshing its own lock
+    (same-session DELETE-then-INSERT, M3.2). BEGIN IMMEDIATE held (one row, no duplicates) — race safety
+    intact, re-confirming M2.2. (Claude Code's first self-diagnosis "BEGIN IMMEDIATE broken / race
+    condition" was WRONG and it retracted it; the one-row result disproves a serialization failure.)
+    FINDING: agent identity is per-config → independent concurrent callers are invisible to each other.
+    Fine for solo; foundational identity question for M8 team mode. Parked in BACKLOG. No code change now.
 
 **Why split:** four tools + init registration far exceeds the 6-file cap and mixes concerns;
 `check_lock` first (read-only) de-risks the transport/registration plumbing before any
