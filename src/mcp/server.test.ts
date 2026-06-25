@@ -2,9 +2,13 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { openDatabase, type MeshLockDatabase } from "../core/db.js";
 import { acquireLock } from "../core/lock-engine.js";
 import { getRepoRoot } from "../core/git.js";
+import type { Config } from "../core/config.js";
+import { createServer } from "./server.js";
 import { makeCheckLockHandler } from "./tools/check-lock.js";
 
 let tempDir: string;
@@ -57,5 +61,44 @@ describe("check_lock handler", () => {
     expect(text).toContain("LOCKED");
     expect(text).toContain(SESSION);
     expect(text).toContain("exclusive");
+  });
+});
+
+describe("createServer registration", () => {
+  it("registers exactly the four MCP tools, discoverable via tools/list", async () => {
+    const config: Config = {
+      mode: "solo",
+      session_id: SESSION,
+      relay_url: null,
+      lock_timeout: 1800,
+      lock_mode: "exclusive",
+      granularity: "file",
+      cross_branch_mode: "warn",
+    };
+    const server = createServer(db, config);
+
+    // A linked in-memory transport pair gives a real tools/list round-trip with
+    // no child process and no stdio — so this exercises the registerTool wiring
+    // in server.ts, which the handler-level tests never touch.
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: "meshlock-test", version: "0.0.0" });
+    await Promise.all([
+      server.connect(serverTransport),
+      client.connect(clientTransport),
+    ]);
+
+    try {
+      const { tools } = await client.listTools();
+      const names = tools.map((t) => t.name).sort();
+      expect(names).toEqual([
+        "acquire_lock",
+        "check_lock",
+        "release_lock",
+        "team_status",
+      ]);
+    } finally {
+      await client.close();
+      await server.close();
+    }
   });
 });
