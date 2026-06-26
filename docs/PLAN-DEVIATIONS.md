@@ -90,7 +90,7 @@ retrofitted into its response cheaply later.
   behaves like the M2 path-only lock. MeshLock does NOT hard-require git to lock a file.
 
 **Scope boundary:** M2.5 builds the branch dimension + warn/block/ignore decision ONLY.
-It does NOT build the change briefing — that's M3.5 (`changelog.ts`). M2.5's cross-branch
+It does NOT build the change briefing — that's M3.5 (`changes.ts`). M2.5's cross-branch
 warning is just the hook M3.5 enriches.
 
 **BUILD OUTCOME (accepted):** Built with Opus 4.8/xhigh. 6 files (db.test.ts a forced 6th —
@@ -267,13 +267,56 @@ correctly being held until M2.5 lands.
 
 ---
 
-## M3.5 — Change briefing (the differentiator)  📋
+## M3.5 — Change briefing (the differentiator)  🔨
 **Plan says:** insert between M3 and M4. New `core/changelog.ts` + `file_changelog`
 migration; record diff summary on release; enrich `acquire_lock` response with recent
 change history. Solo only (cross-machine is M8). Files: changelog.ts, changelog.test.ts,
 migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
-**We did:** 📋 not started. Depends on M2.5 (branch column) and M3.2 (acquire_lock existing).
+**NAMING DEVIATION:** plan's `changelog.ts` / `file_changelog` renamed to **`core/changes.ts`**
+and the **`change_log`** table ("changelog" reads like release-notes; "change_log" reads like a
+log of changes). The git-diff helper lives separately in **`core/diff.ts`**.
+
+**Pre-M3.5a investigation gate (resolved 2026-06-26):** confirmed `lock_mode: "advisory"` is a
+declared-but-unenforced false affordance — plumbed and stored, but acquireLock never branches on
+it (full detail + decision in BACKLOG). Consequence: every lock today behaves as exactly one thing,
+so M3.5 captures ONE lock behaviour and advisory is parked. The gate simplified the milestone.
+
+**Split [architect-invented]:** M3.5a = storage/capture foundation (table + changes.ts + diff
+helper, NO wiring); M3.5b = acquire-time snapshot capture (engine acquire path); M3.5c = release
+recording + acquire briefing (the payoff).
+
+**We did:**
+- ✅ **M3.5a [architect-invented]** (Opus 4.8/xhigh): `005_change_log.sql` — ALTER locks ADD
+  `content_snapshot` (in-place, NULLABLE, NO default; the deliberate INVERSE of S1a's non-null
+  repo_root — a missing baseline is legitimate, not a bug) + CREATE `change_log` (surrogate `id`,
+  NO UNIQUE on (repo_root,path,branch) — it's a LOG, many rows per identity is the feature, vs
+  `locks` as STATE). `core/changes.ts` (recordChange/getChanges; pure repo-scoped storage; `?? null`
+  coalescing for better-sqlite3's undefined-rejection; every WHERE leads with `repo_root = ?` per S1;
+  three-way branch filter omitted/string/null). `core/diff.ts` (`diffContent` via `git diff --no-index`,
+  `spawnSync` so exit-1 = "files differ" = success, NOT a throw; scratch temp dir cleaned in `finally`;
+  identical inputs → ""). db.test.ts forced update (column-set + migration-list assertions). 78 tests
+  (was 62, +16). `diff` NOT NULL = the floor; `summary`/`diff_stat` nullable = enrichment; storage is
+  dumb (records unconditionally — the skip-empty policy is M3.5c's). Additive improvement ACCEPTED:
+  `ORDER BY changed_at DESC, id DESC` — `id` as a deterministic same-millisecond tiebreak (tested).
+- 📋 **M3.5b [architect-invented]:** acquire-time snapshot capture — populate `locks.content_snapshot`.
+  First engine-touch since M3. Tool reads file + injects (engine stays pure); refresh PRESERVES the
+  original baseline (re-snapshotting would reset it mid-edit). Opus 4.8/xhigh.
+- 📋 **M3.5c [architect-invented]:** release diffs snapshot-vs-current + records the change_log row
+  (+ optional agent summary); acquire briefs the next holder from getChanges. The payoff.
+
+**Follow-ons spawned by M3.5a (NOT done here):**
+- **[M3.5c]** Diff header noise: `diffContent` output carries absolute scratch temp paths in the
+  `---`/`+++`/`diff --git` header lines. Decide at M3.5c where normalization lives — lean: give
+  `diffContent` an optional logical-path label so headers show the real path, supplied at the call
+  site that has it. The raw stored diff is fine until it is actually surfaced to an agent.
+- **[M3.5b/c]** `diff_stat` column exists but nothing computes it (always NULL today) — intentional
+  per spec; compute it at capture in M3.5b/c. Tracked so the empty column isn't mistaken for a bug.
+- **[CLAUDE.md]** Add a `changes` commit scope — the briefing subsystem (changes.ts / diff.ts /
+  change_log) is its own area; committing it under `lock-engine` misattributes it.
+
+> Product-level M3.5a follow-ons (change_log retention/pruning; snapshot storage + temp-file-I/O perf)
+> live in BACKLOG.md, not here.
 
 ---
 
@@ -290,40 +333,37 @@ migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
 
 ## Current position
 
-**Active milestone:** ✅ **M3 (MCP server) COMPLETE** — full 4-tool surface registered and proven
-live (agent ran check→acquire→status→release over real JSON-RPC, verified in the DB). → 📋 **M3.5 next**
-(change briefing — THE differentiator: record what changed on release, brief the next agent on acquire).
-First demo-able moment reached; promotion unblocked (30-60s build-in-public clip, NOT a Show HN yet).
+**Active milestone:** 🔨 **M3.5 (change briefing) IN PROGRESS.** M3.5a (storage/capture foundation)
+✅ DONE — `change_log` table + `content_snapshot` column + `diffContent` helper landed, NO wiring yet.
+78 tests. → 📋 **M3.5b next** (acquire-time snapshot capture — first engine-touch since M3). M3 (MCP
+server) is complete and proven live. Promotion unblocked; George holding.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c, M3.3b, M3.3c, **M3.5a**. 78 tests. The differentiator's storage floor is in; the next
+two sub-tasks wire it into the acquire (M3.5b) and release (M3.5c) paths.
+
+<!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
+
+**[62 tests]** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
 S1a, S1b, S1c, M3.3b, M3.3c. The cooperation path is real: meshlock self-registers into Claude Code,
-and a live agent coordinates file locks (repo-scoped, branch-aware) through the four tools. 62 tests.
+and a live agent coordinates file locks (repo-scoped, branch-aware) through the four tools.
 
-**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+**[61 tests]** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
 S1a, S1b, S1c, M3.3b. Full 4-tool MCP surface, repo-scoped end to end, `meshlock` is now a runnable
-command that self-registers into Claude Code. 61 tests green. One step (M3.3c, live) from a real
-agent calling the tools.
+command that self-registers into Claude Code. One step (M3.3c, live) from a real agent calling the tools.
 
-**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c. Full 4-tool MCP surface, repo-scoped end to end, tree builds (57 tests green).
+**[57 tests]** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c. Full 4-tool MCP surface, repo-scoped end to end, tree builds.
 Everything needed for an agent to check/acquire/release/survey locks per-repo — EXCEPT the
 registration bridge (M3.3b) that lets a real agent discover the server.
-
-**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a, S1a.
-Full 4-tool MCP surface; branch + repo-root resolution centralized & cached; locks table has the
-repo_root column (scoping inert until S1b wires the engine).
 
 **Side-milestone note:** S1 (repo scoping) is NOT in v6 — spawned by the user-global-registration
 decision. Option B chosen (global DB + repo_root column) for relay-conformance. Slots before
 meshlock init in build order, outside the M-numbering.
 
-**Built & reviewed so far:** M1 (config), M2.1 (db), M2.2 (lock engine),
-M3.1 (check_lock), M3.1b (path/dir refactor), M2.5 (branch-aware engine), M3.2 (acquire_lock),
-M3.2b (release_lock), M3.2c (core/git.ts cached resolver), M3.3a (team_status). Full 4-tool
-MCP surface complete; branch resolution centralized + cached.
-
 **Pending teaching:** Block 6 (NULL three-valued logic, undefined-vs-null, z.infer) proposed
-but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compound.
+but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. M3.5a left 3 (`?? null` runtime erasure,
+state-vs-log, null≠undefined) — corrected in-chat at M3.5a review. Clear before they compound.
 
 **Backlog items captured (not lost):**
 - Ensure `data/migrations` ships in the published npm tarball (`files` field) — packaging risk.
@@ -344,4 +384,5 @@ but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. Clear before they compoun
 - [engineering] Test asserting expireStaleLocks reaps expired rows ACROSS repos — pins its deliberate global-ness so a maintainer can't add a repo filter and silently break cross-repo reaping (S1b issue #2).
 
 > Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
-> conflict / issue #1) live in BACKLOG.md, not here. This file tracks build-sequence follow-ons only.
+> conflict / issue #1; advisory lock mode; change_log retention; snapshot perf) live in BACKLOG.md,
+> not here. This file tracks build-sequence follow-ons only.

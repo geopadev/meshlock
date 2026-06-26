@@ -41,6 +41,12 @@ Whether the engine actually locks at directory granularity — vs only ever per-
 same declared-vs-delivered class as advisory. Not in M3.5 scope. Investigate with the same
 grep-the-engine method before relying on it; likely another label-only field today.
 
+## Change-log retention / pruning (noted at M3.5a)
+change_log is append-only with NO retention policy. A long-lived watcher daemon (M4+) accumulates
+change history forever. Needs an age- or count-based prune eventually (e.g. keep last N records per
+path, or drop records older than X days). Not urgent at solo/manual-release cadence; revisit when the
+M4 watcher makes capture continuous and the table can grow without bound.
+
 ## Phase-2 / post-September
 - AgentMesh full hub (prompt engine, pipeline tools, multi-team)
 - MeshLearn (learning-as-you-build product)
@@ -85,8 +91,11 @@ grep-the-engine method before relying on it; likely another label-only field tod
   back off. (Surfaced in live stress test A — denial names the holder + gives guidance
   but not the expiry.) Small UX win.
 
-## Change-briefing storage optimization (noted at M3.5a, revisit if files get large)
+## Change-briefing storage / perf optimization (noted at M3.5a, revisit if files get large or capture goes hot)
 - M3.5a stores the full acquire-time file content as `locks.content_snapshot` for per-agent diff
   precision. For large or binary files this is heavy. SHA variant: `git hash-object` the file at
   acquire, store the 40-char blob id, diff the blob at release. Tiny storage, but git-coupled and
   breaks for non-git files. Only worth it if real usage shows snapshot bloat.
+- diff.ts writes both sides to a scratch temp dir and spawns a git process per diffContent call.
+  Fine at release cadence; would matter if capture ever moved onto a hot path (the M4 continuous
+  watcher). Revisit alongside the SHA variant if perf shows up.
