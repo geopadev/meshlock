@@ -39,6 +39,7 @@ describe("openDatabase", () => {
         "002_add_branch_to_locks.sql",
         "003_add_repo_root_to_locks.sql",
         "004_drop_repo_root_default.sql",
+        "005_change_log.sql",
       ]);
       // Each applied_at should be a parseable ISO timestamp.
       for (const m of applied) {
@@ -57,10 +58,11 @@ describe("openDatabase", () => {
         .all() as { name: string; notnull: number; pk: number; dflt_value: string | null }[];
 
       const byName = new Map(columns.map((c) => [c.name, c]));
-      // `repo_root` is present alongside the post-002 columns.
+      // `repo_root` (003) and `content_snapshot` (005) join the post-002 columns.
       expect([...byName.keys()].sort()).toEqual([
         "acquired_at",
         "branch",
+        "content_snapshot",
         "expires_at",
         "mode",
         "path",
@@ -81,6 +83,11 @@ describe("openDatabase", () => {
       expect(byName.get("mode")!.notnull).toBe(1);
       expect(byName.get("acquired_at")!.notnull).toBe(1);
       expect(byName.get("expires_at")!.notnull).toBe(1);
+      // 005 added content_snapshot as a NULLABLE column with NO default — a
+      // missing baseline is legitimate (the inverse of repo_root's non-null
+      // identity), so it must not be forced or defaulted.
+      expect(byName.get("content_snapshot")!.notnull).toBe(0);
+      expect(byName.get("content_snapshot")!.dflt_value).toBeNull();
 
       // A unique index spanning (repo_root, path, branch) exists.
       const indexes = db.prepare("PRAGMA index_list(locks)").all() as {
