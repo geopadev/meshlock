@@ -15,6 +15,32 @@ relay): team mode needs identity per-agent/per-developer, not per-config. Option
 so each agent/subagent is distinct; (c) per-init-context identity. Defer to M8 where the full
 team-mode context makes the right choice clear. Logged so M8 doesn't rediscover it cold.
 
+## Advisory lock mode — declared but NOT enforced (false affordance, found 2026-06-26)
+Resolved the pre-M3.5a investigation gate. `lock_mode: z.enum(["exclusive","advisory"])` is declared
+in config.ts (default "exclusive"), the `mode` column exists on the locks table (migration 001), and
+the value is threaded all the way through lock-engine.ts (LockMode type, INSERT, SELECT, return) and
+round-trips correctly. BUT acquireLock NEVER branches on it — a grep of lock-engine.ts shows no
+`mode === "advisory"` conditional anywhere in the conflict logic. An advisory lock blocks exactly
+like an exclusive one. The promised semantics (advisory = a soft "I'm here" signal that does NOT
+block) are unimplemented. A user can set lock_mode:"advisory", it validates and stores, and they
+silently still get blocked. This is a false affordance: the config promises behaviour the engine ignores.
+- FALSE-CONFIDENCE TEST: lock-engine.test.ts asserts a stored advisory lock round-trips its label
+  (`result.lock.mode).toBe("advisory")`). That tests the COLUMN, not the non-blocking behaviour, so
+  it makes advisory look tested when it isn't. If advisory is ever implemented, add a test proving two
+  advisory holders on the same (repo_root, path, branch) COEXIST (today they would not).
+- DECISION DEFERRED (off the Sept critical path): either (a) implement non-blocking advisory semantics
+  — a single branch in acquireLock's conflict check — or (b) drop "advisory" from the schema until it's
+  real, so config can't promise what the engine ignores. Lean: (b) now (don't ship a false affordance),
+  revisit (a) post-September if a concrete use case appears.
+- VOCABULARY TRAP for future readers: "advisory" also appears in lock-engine.ts comments meaning
+  "informational" (the cross-branch warn message) — unrelated to lock_mode "advisory". Do not conflate.
+
+## Lock granularity "directory" — declared, enforcement unverified
+Sibling to the above. config.ts declares `granularity: z.enum(["file","directory"])` (default "file").
+Whether the engine actually locks at directory granularity — vs only ever per-file — is unverified;
+same declared-vs-delivered class as advisory. Not in M3.5 scope. Investigate with the same
+grep-the-engine method before relying on it; likely another label-only field today.
+
 ## Phase-2 / post-September
 - AgentMesh full hub (prompt engine, pipeline tools, multi-team)
 - MeshLearn (learning-as-you-build product)
@@ -58,3 +84,9 @@ team-mode context makes the right choice clear. Logged so M8 doesn't rediscover 
   session. A blocked agent wants to know "until when" to decide whether to wait or
   back off. (Surfaced in live stress test A — denial names the holder + gives guidance
   but not the expiry.) Small UX win.
+
+## Change-briefing storage optimization (noted at M3.5a, revisit if files get large)
+- M3.5a stores the full acquire-time file content as `locks.content_snapshot` for per-agent diff
+  precision. For large or binary files this is heavy. SHA variant: `git hash-object` the file at
+  acquire, store the 40-char blob id, diff the blob at release. Tiny storage, but git-coupled and
+  breaks for non-git files. Only worth it if real usage shows snapshot bloat.
