@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -5,6 +6,22 @@ import type { MeshLockDatabase } from "../../core/db.js";
 import type { Config } from "../../core/config.js";
 import { acquireLock } from "../../core/lock-engine.js";
 import { getCurrentBranch, getRepoRoot } from "../../core/git.js";
+
+/**
+ * Read the file at `path` as the acquire-time baseline snapshot (M3.5b). This is
+ * the TOOL's job, not the engine's: the engine never touches the filesystem, so
+ * the tool reads here — OUTSIDE the engine transaction — and injects the content.
+ * A missing or unreadable file is NOT an error: there is simply no baseline yet
+ * (e.g. the agent is about to CREATE the file), so we capture null and let M3.5c
+ * treat a null baseline as "new file" (all content reported as additions).
+ */
+function captureSnapshot(path: string): string | null {
+  try {
+    return readFileSync(path, "utf-8");
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Input shape for `acquire_lock`. Only `path` — the tool resolves the git branch
@@ -46,6 +63,9 @@ export function makeAcquireLockHandler(db: MeshLockDatabase, config: Config) {
   return async ({ path }: { path: string }): Promise<CallToolResult> => {
     const branch = await getCurrentBranch(dirname(path));
     const repoRoot = await getRepoRoot(dirname(path));
+    // Capture the baseline now, before the engine call. The engine ignores this
+    // on a same-session refresh and keeps the original baseline.
+    const contentSnapshot = captureSnapshot(path);
 
     const result = acquireLock(db, {
       repoRoot,
@@ -55,6 +75,7 @@ export function makeAcquireLockHandler(db: MeshLockDatabase, config: Config) {
       timeoutSeconds: config.lock_timeout,
       branch,
       crossBranchMode: config.cross_branch_mode,
+      contentSnapshot,
     });
 
     if (!result.ok) {
