@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
@@ -59,6 +59,14 @@ function branchOf(path: string): string | null {
       branch: string | null;
     }
   ).branch;
+}
+
+function snapshotOf(path: string): string | null {
+  return (
+    db.prepare("SELECT content_snapshot FROM locks WHERE path = ?").get(path) as {
+      content_snapshot: string | null;
+    }
+  ).content_snapshot;
 }
 
 beforeEach(async () => {
@@ -164,5 +172,27 @@ describe("acquire_lock handler", () => {
     expect(text).toContain(OTHER_SESSION);
     // Both locks now coexist: the seeded "main" plus our branchless one.
     expect(rowCount(path)).toBe(2);
+  });
+
+  it("captures the file's content as the snapshot when the file exists", async () => {
+    const path = join(tempDir, "withcontent.ts");
+    await writeFile(path, "export const answer = 42;\n");
+    const handler = makeAcquireLockHandler(db, makeConfig());
+
+    const text = firstText(await handler({ path }));
+
+    expect(text).toContain("Acquired");
+    expect(snapshotOf(path)).toBe("export const answer = 42;\n");
+  });
+
+  it("captures a null snapshot for a non-existent path and does not throw", async () => {
+    // The file is never created — reading it ENOENTs, which the tool swallows.
+    const path = join(tempDir, "ghost.ts");
+    const handler = makeAcquireLockHandler(db, makeConfig());
+
+    const text = firstText(await handler({ path }));
+
+    expect(text).toContain("Acquired");
+    expect(snapshotOf(path)).toBeNull();
   });
 });

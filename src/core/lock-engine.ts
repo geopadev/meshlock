@@ -31,6 +31,14 @@ export interface Lock {
   acquired_at: string;
   expires_at: string;
   branch: string | null;
+  /**
+   * Baseline file content captured when this session FIRST took the lock
+   * (M3.5b), or null if the file was absent/unreadable at that moment. M3.5c
+   * diffs the release-time content against this to report what changed. The
+   * column (005) is nullable with no default — a missing baseline is legitimate.
+   * Preserved across same-session refreshes; dies with the lock on release.
+   */
+  content_snapshot: string | null;
 }
 
 /** Input to {@link acquireLock}. */
@@ -48,6 +56,14 @@ export interface AcquireInput {
   branch?: string | null;
   /** How to handle a cross-branch conflict. Defaults to DEFAULT_CROSS_BRANCH_MODE. */
   crossBranchMode?: CrossBranchMode;
+  /**
+   * Baseline file content to store at acquire (M3.5b). The TOOL reads the file
+   * and injects it here — the engine never touches the filesystem. Optional: a
+   * missing/unreadable file is captured as null. IGNORED on a same-session
+   * refresh, where the engine preserves the snapshot already on the row so the
+   * baseline stays the content from when the session first took the lock.
+   */
+  contentSnapshot?: string | null;
 }
 
 /**
@@ -123,12 +139,12 @@ export function acquireLock(
   // NULL`, with a string it behaves like `=`. This is why two branchless locks
   // count as the same logical branch even though SQL `=` would never match NULL.
   const selectSame = db.prepare<[string, string, string | null], Lock>(
-    "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"
+    "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"
   );
   // The mirror: `branch IS NOT ?` is null-safe inequality — a different branch,
   // treating NULL as distinct from any name. Still scoped to this repo.
   const selectCross = db.prepare<[string, string, string | null, string, string], Lock>(
-    `SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks
+    `SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks
      WHERE repo_root = ? AND path = ? AND branch IS NOT ? AND session_id != ? AND expires_at > ?
      ORDER BY branch`
   );
@@ -136,8 +152,8 @@ export function acquireLock(
     "DELETE FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"
   );
   const insert = db.prepare(
-    `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch)
-     VALUES (@repo_root, @path, @session_id, @mode, @acquired_at, @expires_at, @branch)`
+    `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot)
+     VALUES (@repo_root, @path, @session_id, @mode, @acquired_at, @expires_at, @branch, @content_snapshot)`
   );
 
   const txn = db.transaction((): AcquireResult => {
@@ -169,6 +185,23 @@ export function acquireLock(
       // "ignore": proceed silently.
     }
 
+    // Snapshot capture (M3.5b). On the INITIAL acquire we store the baseline the
+    // caller injected. On a same-session REFRESH we PRESERVE the snapshot already
+    // on the row and discard the incoming value, so the baseline stays the content
+    // from when this session first took the lock — re-snapshotting on a renewal
+    // would reset the baseline to a mid-edit state and under-report the diff.
+    //
+    // `same` here is the (repo, path, branch) row regardless of session. If it
+    // belongs to this session it is a refresh; a different-session `same` was
+    // either a live block (returned above) or an expired takeover (below), and a
+    // takeover should capture the NEW holder's baseline, not the dead lock's.
+    let snapshotToStore: string | null;
+    if (same !== undefined && same.session_id === sessionId) {
+      snapshotToStore = same.content_snapshot;
+    } else {
+      snapshotToStore = input.contentSnapshot ?? null;
+    }
+
     // Write our lock. DELETE-then-INSERT rather than ON CONFLICT: the
     // UNIQUE(repo_root, path, branch) index does NOT fire for NULL branches (SQL
     // treats NULLs as distinct), so an upsert would silently insert a duplicate
@@ -183,6 +216,7 @@ export function acquireLock(
       acquired_at: now,
       expires_at: futureIso(timeoutSeconds),
       branch,
+      content_snapshot: snapshotToStore,
     };
     deleteSame.run(repoRoot, path, branch);
     insert.run(lock);
@@ -220,7 +254,7 @@ export function checkLock(
   const now = nowIso();
   const row = db
     .prepare<[string, string], Lock>(
-      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE repo_root = ? AND path = ?"
+      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ?"
     )
     .get(repoRoot, path);
 
@@ -235,7 +269,7 @@ export function listLocks(db: MeshLockDatabase, repoRoot: string): Lock[] {
   const now = nowIso();
   return db
     .prepare<[string, string], Lock>(
-      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch FROM locks WHERE repo_root = ? AND expires_at > ? ORDER BY path"
+      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND expires_at > ? ORDER BY path"
     )
     .all(repoRoot, now);
 }

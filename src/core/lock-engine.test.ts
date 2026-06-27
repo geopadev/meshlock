@@ -123,6 +123,90 @@ describe("acquireLock — same-session re-acquire", () => {
   });
 });
 
+describe("acquireLock — content snapshot (M3.5b)", () => {
+  const path = "/repo/snap.ts";
+
+  /** Read the stored snapshot for a path straight from the row. */
+  function snapshotOf(p: string): string | null {
+    return (
+      db.prepare("SELECT content_snapshot FROM locks WHERE path = ?").get(p) as {
+        content_snapshot: string | null;
+      }
+    ).content_snapshot;
+  }
+
+  it("stores the snapshot passed on an initial acquire", () => {
+    const r = acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      contentSnapshot: "ORIGINAL CONTENT",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lock.content_snapshot).toBe("ORIGINAL CONTENT");
+    expect(snapshotOf(path)).toBe("ORIGINAL CONTENT");
+  });
+
+  it("preserves the ORIGINAL snapshot across a same-session refresh (keystone)", () => {
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 60,
+      contentSnapshot: "A",
+    });
+    // Same session re-acquires (a refresh) with DIFFERENT content. The baseline
+    // must NOT move to "B" — it stays the content from the first acquire, so the
+    // release-time diff is measured from the true starting point.
+    const refresh = acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 3600,
+      contentSnapshot: "B",
+    });
+    expect(refresh.ok).toBe(true);
+    if (refresh.ok) expect(refresh.lock.content_snapshot).toBe("A");
+    // Still exactly one row (the test-B invariant), still the original baseline.
+    expect(rowCount(db, path)).toBe(1);
+    expect(snapshotOf(path)).toBe("A");
+  });
+
+  it("stores null when no snapshot is provided and does not throw", () => {
+    const r = acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lock.content_snapshot).toBeNull();
+    expect(snapshotOf(path)).toBeNull();
+  });
+
+  it("captures the new holder's snapshot when taking over an EXPIRED lock (not a refresh)", () => {
+    // A's lock is already expired (seeded with no snapshot). B acquiring is a
+    // takeover, NOT a same-session refresh, so B's incoming baseline is stored.
+    seedLock(db, path, SESSION_A, "2000-01-01T00:00:01.000Z");
+    const r = acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      contentSnapshot: "NEW HOLDER",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.lock.content_snapshot).toBe("NEW HOLDER");
+    expect(snapshotOf(path)).toBe("NEW HOLDER");
+  });
+});
+
 describe("releaseLock — ownership", () => {
   it("only the owning session can release; others are a no-op", () => {
     acquireLock(db, {
