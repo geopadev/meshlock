@@ -30,8 +30,7 @@ One concern per prompt. If in doubt, smaller is correct.
 feat(lock-engine): add advisory lock mode
 fix(watcher): debounce rapid successive writes
 chore(hooks): install pre-commit hook on init
-Scopes: lock-engine | mcp | cli | relay | daemon | vscode | hooks | docs
-
+Scopes: lock-engine | changes | mcp | cli | relay | daemon | vscode | hooks | docs
 ## Output rules (concise but complete)
 Compress every reply: same information, fully complete — no dropped files, decisions,
 rationale, or teaching — just denser. Cut filler, hedging, restating, and redundancy;
