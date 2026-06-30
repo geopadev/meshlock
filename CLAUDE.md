@@ -31,3 +31,10 @@ feat(lock-engine): add advisory lock mode
 fix(watcher): debounce rapid successive writes
 chore(hooks): install pre-commit hook on init
 Scopes: lock-engine | mcp | cli | relay | daemon | vscode | hooks | docs
+
+## Output rules (concise but complete)
+Compress every reply: same information, fully complete — no dropped files, decisions,
+rationale, or teaching — just denser. Cut filler, hedging, restating, and redundancy;
+state each point once; use scannable form. "Short" never means skipping content. Applies
+to the post-task report, the plain-English walkthrough, the teaching pass, the quiz, and
+the learning-log entry alike.
