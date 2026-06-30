@@ -91,7 +91,7 @@ M4 watcher makes capture continuous and the table can grow without bound.
   back off. (Surfaced in live stress test A — denial names the holder + gives guidance
   but not the expiry.) Small UX win.
 
-## Change-briefing storage / perf optimization (noted at M3.5a, revisit if files get large or capture goes hot)
+## Change-briefing storage / perf optimization (noted at M3.5a/b, revisit if files get large or capture goes hot)
 - M3.5a stores the full acquire-time file content as `locks.content_snapshot` for per-agent diff
   precision. For large or binary files this is heavy. SHA variant: `git hash-object` the file at
   acquire, store the 40-char blob id, diff the blob at release. Tiny storage, but git-coupled and
@@ -99,3 +99,6 @@ M4 watcher makes capture continuous and the table can grow without bound.
 - diff.ts writes both sides to a scratch temp dir and spawns a git process per diffContent call.
   Fine at release cadence; would matter if capture ever moved onto a hot path (the M4 continuous
   watcher). Revisit alongside the SHA variant if perf shows up.
+- M3.5b: no size cap on `content_snapshot` — a large file is read fully into memory and stored
+  verbatim, re-read on every initial acquire. Same family as the SHA-variant question above; revisit
+  together if a real large-file case appears.
