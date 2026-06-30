@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
 import { acquireLock, type CrossBranchMode } from "../../core/lock-engine.js";
+import { recordChange } from "../../core/changes.js";
 import type { Config } from "../../core/config.js";
 import { clearBranchCache, getRepoRoot } from "../../core/git.js";
 import { makeAcquireLockHandler } from "./acquire-lock.js";
@@ -194,5 +195,39 @@ describe("acquire_lock handler", () => {
 
     expect(text).toContain("Acquired");
     expect(snapshotOf(path)).toBeNull();
+  });
+});
+
+describe("acquire_lock handler — briefing (M3.5c)", () => {
+  it("includes recent change history in the response when the path has prior changes", async () => {
+    const path = join(tempDir, "briefed.ts");
+    // Seed a prior change on this path+branch (branch null in the non-git tempDir,
+    // matching what the handler resolves).
+    recordChange(db, {
+      repoRoot,
+      path,
+      branch: null,
+      sessionId: OTHER_SESSION,
+      diff: "@@ -1 +1 @@\n-old\n+new\n",
+      summary: "tweaked the export",
+      changedAt: "2026-06-01T00:00:00.000Z",
+    });
+
+    const handler = makeAcquireLockHandler(db, makeConfig());
+    const text = firstText(await handler({ path }));
+
+    expect(text).toContain("Acquired");
+    expect(text).toContain("Recent changes to this path:");
+    expect(text).toContain("tweaked the export"); // summary becomes the headline
+    expect(text).toContain(OTHER_SESSION.slice(0, 8));
+  });
+
+  it("shows no history section when the path has no prior changes", async () => {
+    const path = join(tempDir, "untracked.ts");
+    const handler = makeAcquireLockHandler(db, makeConfig());
+    const text = firstText(await handler({ path }));
+
+    expect(text).toContain("Acquired");
+    expect(text).not.toContain("Recent changes");
   });
 });

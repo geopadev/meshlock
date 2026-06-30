@@ -6,6 +6,7 @@ import type { MeshLockDatabase } from "../../core/db.js";
 import type { Config } from "../../core/config.js";
 import { acquireLock } from "../../core/lock-engine.js";
 import { getCurrentBranch, getRepoRoot } from "../../core/git.js";
+import { getChanges, type ChangeRecord } from "../../core/changes.js";
 
 /**
  * Read the file at `path` as the acquire-time baseline snapshot (M3.5b). This is
@@ -21,6 +22,36 @@ function captureSnapshot(path: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * A compact one-line hint from a recorded diff, for the acquire briefing. Prefers
+ * the first genuinely-changed line (a +/- line that is not the +++/--- header);
+ * an empty diff (a recorded no-op) reads as "(no content change)".
+ */
+function diffPreview(diff: string): string {
+  if (diff === "") return "(no content change)";
+  const changed = diff
+    .split("\n")
+    .find(
+      (l) =>
+        (l.startsWith("+") || l.startsWith("-")) &&
+        !l.startsWith("+++") &&
+        !l.startsWith("---")
+    );
+  const preview = (changed ?? diff.split("\n")[0] ?? "").trim();
+  return preview.length > 80 ? `${preview.slice(0, 79)}…` : preview;
+}
+
+/**
+ * One briefing line for a recorded change. Headline prefers diff_stat, then the
+ * agent-written summary, then a diff preview — diff_stat/summary are enrichment
+ * and may be absent, so the diff (the floor) is the guaranteed fallback.
+ */
+function formatChange(c: ChangeRecord): string {
+  const who = `${c.sessionId.slice(0, 8)}…`;
+  const headline = c.diffStat ?? c.summary ?? diffPreview(c.diff);
+  return `- ${c.changedAt} by ${who}: ${headline}`;
 }
 
 /**
@@ -102,6 +133,14 @@ export function makeAcquireLockHandler(db: MeshLockDatabase, config: Config) {
         ` WARNING: this path is also locked on ${otherBranch} by session ` +
         `${result.warning.heldBy} — a cross-branch conflict is possible when ` +
         `the branches merge.`;
+    }
+
+    // Briefing (M3.5c): surface what recent sessions changed on this path+branch,
+    // so the new holder starts informed. A read-only lookup, after the acquire;
+    // when there is no history we add no section (graceful, not an error).
+    const history = getChanges(db, { repoRoot, path, branch, limit: 5 });
+    if (history.length > 0) {
+      text += `\n\nRecent changes to this path:\n${history.map(formatChange).join("\n")}`;
     }
 
     return { content: [{ type: "text", text }] };
