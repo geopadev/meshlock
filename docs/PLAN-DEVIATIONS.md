@@ -299,11 +299,29 @@ recording + acquire briefing (the payoff).
   (was 62, +16). `diff` NOT NULL = the floor; `summary`/`diff_stat` nullable = enrichment; storage is
   dumb (records unconditionally — the skip-empty policy is M3.5c's). Additive improvement ACCEPTED:
   `ORDER BY changed_at DESC, id DESC` — `id` as a deterministic same-millisecond tiebreak (tested).
-- 📋 **M3.5b [architect-invented]:** acquire-time snapshot capture — populate `locks.content_snapshot`.
-  First engine-touch since M3. Tool reads file + injects (engine stays pure); refresh PRESERVES the
-  original baseline (re-snapshotting would reset it mid-edit). Opus 4.8/xhigh.
+- ✅ **M3.5b [architect-invented]:** acquire-time snapshot capture — `Lock.content_snapshot` +
+  `AcquireInput.contentSnapshot`, threaded through all 4 Lock-returning queries + the INSERT. Tool
+  (`acquire-lock.ts`) reads the file sync outside the txn, error→null (engine stays fs-free). Capture-
+  or-preserve: initial acquire stores the injected baseline; same-session refresh (`same.session_id
+  === sessionId`) PRESERVES the existing snapshot, discarding the incoming one (re-snapshotting on
+  renewal would reset the baseline mid-edit, under-reporting the eventual diff); a different-session
+  expired row is a TAKEOVER not a refresh and correctly captures the new holder's baseline. 84 tests
+  (was 78, +6: keystone refresh-preserve, initial-store, null/omitted, expired-takeover; +2 tool tests).
+  Fragile seam: refresh-preservation depends on reading `same.content_snapshot` BEFORE
+  `deleteSame.run()` — the keystone test is the tripwire if that ordering is ever disturbed.
 - 📋 **M3.5c [architect-invented]:** release diffs snapshot-vs-current + records the change_log row
   (+ optional agent summary); acquire briefs the next holder from getChanges. The payoff.
+
+**Follow-ons spawned by M3.5b (NOT done here):**
+- **[M3.5c]** Binary files: `captureSnapshot` does `readFileSync(path,"utf-8")`, which decodes binary
+  content lossily — the snapshot (and any diff against it) is meaningless for non-text files. No guard
+  exists. M3.5c must decide: skip snapshot/diff for detected-binary files, or store differently
+  (base64) — before binary files hit the diff path for real.
+- **[minor, low priority]** `captureSnapshot` runs before the conflict check, so a blocked acquire
+  still pays a wasted file read.
+- **[minor, low priority]** `listLocks` now selects `content_snapshot`, so `team_status` materializes
+  every lock's snapshot blob into memory though it never renders it. Fix = a projection query for
+  `listLocks` that omits the column (only `checkLock` needs it, for M3.5c's release-time diff).
 
 **Follow-ons spawned by M3.5a (NOT done here):**
 - **[M3.5c]** Diff header noise: `diffContent` output carries absolute scratch temp paths in the
@@ -333,14 +351,14 @@ recording + acquire briefing (the payoff).
 
 ## Current position
 
-**Active milestone:** 🔨 **M3.5 (change briefing) IN PROGRESS.** M3.5a (storage/capture foundation)
-✅ DONE — `change_log` table + `content_snapshot` column + `diffContent` helper landed, NO wiring yet.
-78 tests. → 📋 **M3.5b next** (acquire-time snapshot capture — first engine-touch since M3). M3 (MCP
-server) is complete and proven live. Promotion unblocked; George holding.
+**Active milestone:** 🔨 **M3.5 (change briefing) IN PROGRESS.** M3.5a (storage foundation) and M3.5b
+(acquire-time snapshot capture) ✅ DONE. 84 tests. → 📋 **M3.5c next** (release diffs + records the
+change_log row; acquire briefs the next holder — the payoff sub-task). M3 (MCP server) complete and
+proven live. Promotion unblocked; George holding for the M3.5 ship / Show HN inflection point.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, **M3.5a**. 78 tests. The differentiator's storage floor is in; the next
-two sub-tasks wire it into the acquire (M3.5b) and release (M3.5c) paths.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, **M3.5b**. 84 tests. The differentiator's storage floor + the
+acquire-side baseline are both in; M3.5c connects them into an actual briefing.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 
