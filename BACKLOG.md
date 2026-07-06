@@ -47,6 +47,12 @@ change history forever. Needs an age- or count-based prune eventually (e.g. keep
 path, or drop records older than X days). Not urgent at solo/manual-release cadence; revisit when the
 M4 watcher makes capture continuous and the table can grow without bound.
 
+## Watcher ignore-list configurability (noted at M4.3)
+Every unguarded write warns; real repos with build outputs/generated files beyond the three default
+ignores (.git/node_modules/.meshlock) will be noisy. Needs a user-facing ignore config (config.json
+field and/or .meshlockignore file). Decide the shape when config next opens (M5/M6); resolve together
+with the M4.1 replace-vs-merge `ignore` semantics follow-on in PLAN-DEVIATIONS.
+
 ## Nested repos / git submodules — out of scope for v1 (decided at M4.2)
 The daemon resolves ONE repoRoot at startup and classifies every event against it. A root containing
 nested repos (submodules) misattributes the nested repo's events to the outer root. Architect call:

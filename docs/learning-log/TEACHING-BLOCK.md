@@ -172,4 +172,37 @@ of this once Fable access ends.
 
 ---
 
+## M4.3 — daemon process + CLI (`daemon/index.ts`, `cli/index.ts`, watcher fixes)
+
+### TS syntax
+- **Deps object + optional field defaulting:** `startDaemon(deps: DaemonDeps)` with
+  `deps.sink ?? ((line) => process.stderr.write(...))` — the injectable-dependency pattern typed: the
+  interface documents what the daemon needs; the `??` supplies the production default so tests inject
+  an array-collector instead of capturing stderr.
+- **`err: unknown` (not `any`).** chokidar's error payload is untyped, so it arrives as `unknown` —
+  which FORCES the narrowing `err instanceof Error ? err.message : String(err)` before use. `any` would
+  let you `.message` blindly and crash on a non-Error; `unknown` makes the check mandatory.
+- **`void daemon.close().then(...)`** in the signal handler — the `void` operator explicitly discards a
+  promise in a place that can't await (a sync signal callback), telling the linter "not awaited, on
+  purpose."
+
+### Concepts
+- **Factory vs process layer.** `startDaemon` has NO process.exit, NO signal handlers — it runs anywhere
+  (tests included). The CLI owns everything process-shaped: config load, DB open, repoRoot resolution,
+  signals, exit codes. Same edge-vs-core split as tool-vs-engine.
+- **Alarm-fatigue policy.** Guarded events are deliberately silent: the daemon's value is the UNGUARDED
+  signal, and logging the steady state buries it. "What to log" is a product decision, not plumbing.
+- **stdout vs stderr discipline.** stdout belongs to the MCP protocol (serve); ALL daemon output goes to
+  stderr — a banner on stdout would corrupt a JSON-RPC stream if streams were ever shared.
+- **Control writes, again.** The guarded-silence test writes an unlocked control file: one warning for
+  the control proves the pipeline is alive, so silence about the locked file means "guarded," not
+  "broken." Testing an absence requires proving the detector works.
+- **Self-feeding loops.** The test DB lives OUTSIDE the watched tree; live finding: a warning log inside
+  the repo loops forever (warn → write → event → warn). Any observer that writes into what it observes
+  feeds itself — the .meshlock ignore exists for exactly this.
+- **Real-error testing.** The error path uses a genuine EACCES (chmod-000 subdir) rather than a mock —
+  deterministic, and it proves chokidar's actual behaviour, not an assumption about it.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->
