@@ -5,6 +5,8 @@ import { openDatabase } from "../core/db.js";
 import { getDatabasePath, loadConfig } from "../core/config.js";
 import { getRepoRoot } from "../core/git.js";
 import { startDaemon } from "../daemon/index.js";
+import { installHook } from "../hooks/install.js";
+import { runPreCommit } from "../hooks/run.js";
 import {
   getClaudeConfigPath,
   registerMeshlock,
@@ -16,9 +18,11 @@ function usage(): string {
     "Usage: meshlock <command>",
     "",
     "Commands:",
-    "  init    Register the meshlock MCP server in Claude Code's user config",
-    "  serve   Start the MCP server over stdio (how Claude Code launches it)",
-    "  watch   Watch the current repo and warn about edits to unlocked paths",
+    "  init              Register the meshlock MCP server in Claude Code's user config",
+    "  serve             Start the MCP server over stdio (how Claude Code launches it)",
+    "  watch             Watch the current repo and warn about edits to unlocked paths",
+    "  install-hook      Install the pre-commit lock gate into this repo's .git/hooks",
+    "  hook pre-commit   Run the pre-commit gate (invoked by the installed hook)",
     "",
     "With no command, meshlock runs `serve`.",
   ].join("\n");
@@ -84,6 +88,54 @@ async function runWatch(): Promise<void> {
   process.stderr.write(`[meshlock] watching ${repoRoot} (Ctrl-C to stop)\n`);
 }
 
+/**
+ * Install the pre-commit shim into the repo containing cwd. A refusal (foreign
+ * hook, not a repo) exits 1 with the reason — installHook never clobbers.
+ */
+async function runInstallHook(): Promise<void> {
+  const repoRoot = await getRepoRoot(process.cwd());
+  const result = installHook(repoRoot);
+  if (!result.installed) {
+    console.error(`install-hook: ${result.reason}`);
+    process.exit(1);
+  }
+  console.log(
+    `${result.replaced ? "Updated" : "Installed"} pre-commit hook at ${result.hookPath}`
+  );
+  console.log("Commits staging paths locked by other sessions will now be blocked.");
+}
+
+/**
+ * The shim's entry: assemble deps (config for session identity, the real DB,
+ * cwd = where git invoked the hook), run the gate, report on STDERR (stdout
+ * discipline: hooks shouldn't pollute it), exit with the verdict.
+ *
+ * FAIL-OPEN, belt #2: runPreCommit already catches its own internals, but the
+ * deps assembly here (config load, DB open) can throw BEFORE the runtime gets
+ * control. Any such failure exits 0 with a warning — exit 1 is reserved for a
+ * positive conflict verdict, never for meshlock's own breakage.
+ */
+async function runHookPreCommit(): Promise<void> {
+  try {
+    const config = await loadConfig();
+    const db = openDatabase(getDatabasePath());
+    const result = await runPreCommit({
+      db,
+      cwd: process.cwd(),
+      sessionId: config.session_id,
+    });
+    db.close();
+    if (result.message !== null) {
+      process.stderr.write(`${result.message}\n`);
+    }
+    process.exit(result.exitCode);
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    process.stderr.write(`[meshlock] pre-commit check skipped (fail-open): ${detail}\n`);
+    process.exit(0);
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
@@ -93,6 +145,19 @@ async function main(): Promise<void> {
     case "watch":
       await runWatch();
       return;
+    case "install-hook":
+      await runInstallHook();
+      return;
+    case "hook": {
+      const sub = process.argv[3];
+      if (sub === "pre-commit") {
+        await runHookPreCommit();
+        return;
+      }
+      console.error(`Unknown hook: ${sub ?? "(none)"}\n\n${usage()}`);
+      process.exit(1);
+      return;
+    }
     case "serve":
     case undefined:
       // serve owns stdout (the MCP protocol channel) — nothing else may write it.
