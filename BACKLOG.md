@@ -14,6 +14,10 @@ relay): team mode needs identity per-agent/per-developer, not per-config. Option
 (NOT now): (a) keep session_id per-config [current, fine for solo]; (b) inject session_id per call
 so each agent/subagent is distinct; (c) per-init-context identity. Defer to M8 where the full
 team-mode context makes the right choice clear. Logged so M8 doesn't rediscover it cold.
+- M5.1c addendum: the any-branch lookups (daemon classify, check_lock tool) still return an
+  arbitrary LIVE row under multi-branch coexistence — bounded by the liveness fix, consistent with
+  their "is anything holding this path?" semantics, but part of the same M8 branch/identity
+  discussion.
 
 ## Advisory lock mode — declared but NOT enforced (false affordance, found 2026-06-26)
 Resolved the pre-M3.5a investigation gate. `lock_mode: z.enum(["exclusive","advisory"])` is declared
@@ -68,7 +72,9 @@ smoke test). Make a conscious bump decision post-M4 — check the v5 changelog f
 - AgentMesh full hub (prompt engine, pipeline tools, multi-team)
 - MeshLearn (learning-as-you-build product)
 - meshlock-cloud: hosted relay, billing, seat enforcement
-- Git worktree isolation (L6 enforcement layer) — Phase 2
+- Git worktree isolation (L6 enforcement layer) — Phase 2. M5.1c note: a multi-branch release diffs
+  every branch's baseline against the SAME current file content — correct for one working tree, wrong
+  if worktrees let branches genuinely diverge on disk. Resolve together.
 - Mobile app
 
 ## M2.5 — Branch-aware locking (now in implementation plan)

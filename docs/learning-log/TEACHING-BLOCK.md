@@ -266,4 +266,40 @@ of this once Fable access ends.
 
 ---
 
+## M5.1c — releaseLock returns deleted rows + liveness fix (`lock-engine.ts`, `release-lock.ts`)
+
+### TS syntax
+- **Return-type change as a refactor forcing function.** `releaseLock(): boolean → Lock[]` — the
+  compiler finds every caller that must change (here: one tool + tests). In JS you'd grep and hope;
+  in TS the old `if (released)` on an array still compiles (truthy!), so note the trap: a TYPE change
+  is loud, a boolean→array SEMANTIC change can be quiet — the tests (`toEqual([])`) carry the real
+  guarantee.
+- **`db.transaction(...).immediate()`** — better-sqlite3's transaction wrapper: the function runs
+  atomically under BEGIN IMMEDIATE, and whatever it returns becomes the call's return value. Second
+  use in the engine (acquireLock's txn is the first) — the house pattern for read-then-write pairs.
+
+### Concepts
+- **Read-then-delete must be one transaction.** SELECT the rows, DELETE them, return what you saw —
+  under BEGIN IMMEDIATE nothing can change between the two statements, so the returned rows are
+  EXACTLY what was deleted. Split across transactions, another connection could slip in between and
+  the return value would lie.
+- **Causal data flow beats look-then-act.** The old shape (checkLock, then releaseLock, then record
+  from the checkLock row) had two reads with DIFFERENT semantics — checkLock's liveness view dropped
+  expired baselines and multi-branch releases collapsed to one arbitrary row. Returning what the
+  delete itself removed makes the recorded data causally tied to the action. General rule: when an
+  operation needs to report on what it affected, have IT return that — don't reconstruct it with a
+  second query.
+- **Where liveness lives depends on candidate count.** Omitted-branch lookup chooses among SEVERAL
+  rows → the expiry filter must be in the WHERE (before the choice). Branch-filtered lookup has ≤1
+  candidate → post-fetch check is equivalent. Same rule, different placement, one comment explaining
+  why — asymmetry is fine when it's reasoned and written down.
+- **"Intended consequences" belong in the diff.** Expired-owned-now-records and per-branch records
+  are behaviour changes a future reader could mistake for bugs; the tool comments name them as
+  deliberate. If a change alters observable behaviour on purpose, say so at the change site.
+- **Transactions don't nest.** releaseLock owning its transaction means a future caller inside an
+  outer txn throws loudly. Composability trade: safety for the common case, a known trap for the
+  exotic one — logged, not hidden.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->

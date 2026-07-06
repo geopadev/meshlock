@@ -449,13 +449,25 @@ fix)** → M5.2 = shell shim + installer + CLI.
   previously-flaky pair made deterministic (feature-seeded-first ordering that fooled the unfiltered
   scan → now blocked with the MAIN row). 121 tests (was 115). Grep-confirmed only the hook changed
   callers.
-- 📋 **M5.1c [architect-invented] — NEXT:** `releaseLock` returns the deleted row(s) (was boolean);
-  release tool records per deleted row (its own branch + baseline) and drops the checkLock call +
-  `held.held` gate. Fixes: foreign-row mis-baseline, expired-but-owned lost record, AND (folded,
-  knowingly — same function) the M5.1b find: the OMITTED-branch checkLock can fetch an expired
-  arbitrary row and report free while a LIVE lock exists on another branch (daemon false-UNGUARDED;
-  check_lock false-FREE). Fix = liveness in the WHERE (`AND expires_at > ?`) so omitted = "any LIVE
-  row".
+- ✅ **M5.1c [architect-invented]** (Fable 5): `releaseLock` returns `Lock[]` (deleted rows, ORDER BY
+  branch; [] = no-op) via SELECT-then-DELETE under BEGIN IMMEDIATE (both statements must observe the
+  same rows). Release tool: pre-read checkLock + `held.held` gate DELETED; one current-content read,
+  then per deleted row binary-guard → diff(row.content_snapshot ?? "", current ?? "") → recordChange
+  with row.branch. Intended consequences: expired-but-owned releases now RECORD (M3.5c lost-record
+  gap closed); multi-branch release records one change per branch against its own baseline; foreign
+  rows unreachable (ownership scoping). checkLock omitted-branch gains `AND expires_at > ?` (any-
+  branch now means any LIVE row — false-free/false-UNGUARDED over an expired sibling fixed); filtered
+  path deliberately untouched (≤1 candidate ⇒ post-fetch equivalent; belt kept both paths). 128 tests
+  (was 121, +7); all three pins green (expired-owned records; expired+live-sibling held/guarded;
+  multi-branch per-branch records).
+- 📋 **M5.2 [architect-invented] — NEXT:** shell shim + installer + CLI wiring (closes M5).
+
+**Follow-ons spawned by M5.1c (NOT done here):**
+- **[trap, note]** releaseLock now opens its own transaction — a future caller inside an outer
+  transaction on the same connection throws ("cannot start a transaction within a transaction")
+  where the old bare DELETE joined it. Loud, not silent; known.
+- **[chore, minor]** Per-row changedAt stamps in a multi-branch release differ by ms; a single shared
+  stamp would group one release's records (cosmetic — id tiebreaker already orders).
 - 📋 **M5.2 [architect-invented]:** shell shim + installer + CLI wiring. SEAM (from M5.1 issue #3):
   the shim converts repo-relative staged paths to the EXACT absolute strings locks record — S1c
   realpath discipline applies; goes verbatim into the prompt.
@@ -486,14 +498,13 @@ fix)** → M5.2 = shell shim + installer + CLI.
 
 ## Current position
 
-**Active milestone:** 🔨 **M5 (pre-commit hook) IN PROGRESS** — M5.1 + M5.1b ✅ DONE, 121 tests; the
-gate is now deterministic. M5.1b surfaced a second engine find (omitted-branch checkLock can report
-free over an expired arbitrary row while a live lock exists on another branch). → 📋 **M5.1c next**
-(releaseLock returns deleted rows + the liveness-in-WHERE fix), then M5.2 (shim + installer).
-Fable-5 sprint; teaching → TEACHING-BLOCK.md.
+**Active milestone:** 🔨 **M5 (pre-commit hook) IN PROGRESS** — M5.1 + M5.1b + M5.1c ✅ DONE, 128
+tests. Decision logic deterministic, release recording causal (deleted rows carry their own baselines),
+omitted-checkLock live-only. → 📋 **M5.2 next** (shell shim + installer + CLI — closes M5; the
+realpath path-conversion seam is the named risk). Fable-5 sprint; teaching → TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, **M5.1b**. 121 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, **M5.1c**. 128 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 
