@@ -46,7 +46,11 @@ export interface WatcherHandle {
   close(): Promise<void>;
 }
 
-export const DEFAULT_DEBOUNCE_MS = 100;
+// 200, not 100: chokidar's atomic mode delays cross-process unlink delivery by
+// ~100ms (its atomic-save detection), so a touch-then-rm transient straddled a
+// 100ms window and emitted add+unlink instead of cancelling (observed live in
+// M4.3's e2e). 200ms re-captures the pair so the add→unlink cancel fires.
+export const DEFAULT_DEBOUNCE_MS = 200;
 
 /**
  * Segment names ignored by default: VCS internals, dependency trees, and the
