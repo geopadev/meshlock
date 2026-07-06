@@ -279,6 +279,84 @@ describe("checkLock", () => {
   });
 });
 
+describe("checkLock — branch filter (M5.1b)", () => {
+  const path = "/repo/multi-branch.ts";
+  const SESSION_C = "33333333-3333-4333-8333-333333333333";
+
+  /** Seed three COEXISTING live locks on one path: main (A), feature (B), branchless (C). */
+  function seedThreeBranches(): void {
+    for (const [sessionId, branch] of [
+      [SESSION_A, "main"],
+      [SESSION_B, "feature"],
+      [SESSION_C, null],
+    ] as const) {
+      const r = acquireLock(db, {
+        repoRoot: REPO_A,
+        path,
+        sessionId,
+        mode: "exclusive",
+        timeoutSeconds: 1800,
+        branch,
+        crossBranchMode: "ignore",
+      });
+      expect(r.ok).toBe(true);
+    }
+    expect(rowCount(db, path)).toBe(3);
+  }
+
+  it("returns exactly the requested branch's row when branches coexist", () => {
+    seedThreeBranches();
+
+    const main = checkLock(db, REPO_A, path, "main");
+    expect(main.held).toBe(true);
+    if (main.held) {
+      expect(main.lock.branch).toBe("main");
+      expect(main.lock.session_id).toBe(SESSION_A);
+    }
+
+    const feature = checkLock(db, REPO_A, path, "feature");
+    expect(feature.held).toBe(true);
+    if (feature.held) {
+      expect(feature.lock.branch).toBe("feature");
+      expect(feature.lock.session_id).toBe(SESSION_B);
+    }
+  });
+
+  it("explicit null matches ONLY the branchless row (IS, not =)", () => {
+    seedThreeBranches();
+
+    const r = checkLock(db, REPO_A, path, null);
+    expect(r.held).toBe(true);
+    if (r.held) {
+      expect(r.lock.branch).toBeNull();
+      expect(r.lock.session_id).toBe(SESSION_C);
+    }
+  });
+
+  it("reports free for a branch with no lock even while other branches hold one", () => {
+    // Only a 'feature' lock exists — neither "main" nor branchless may match it.
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "feature",
+    });
+
+    expect(checkLock(db, REPO_A, path, "main").held).toBe(false);
+    expect(checkLock(db, REPO_A, path, null).held).toBe(false);
+  });
+
+  it("omitted branch still returns SOME live row (any-branch behaviour pinned)", () => {
+    seedThreeBranches();
+
+    const r = checkLock(db, REPO_A, path);
+    expect(r.held).toBe(true);
+    if (r.held) expect(r.lock.path).toBe(path);
+  });
+});
+
 describe("listLocks", () => {
   it("returns only non-expired locks, ordered by path", () => {
     acquireLock(db, {

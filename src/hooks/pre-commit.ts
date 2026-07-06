@@ -38,17 +38,18 @@ export interface CommitCheckInput {
  *    as free and never blocks.
  *  - Own-session locks never block (`session_id === sessionId` is the
  *    committer's own declared claim).
- *  - Same-branch means the engine's null rule: `lock.branch === branch`, where
- *    JS `null === null` is true, so a branchless lock matches a branchless
- *    committer — exactly the engine's `branch IS ?` semantics.
+ *  - Same-branch is enforced IN the lookup (M5.1b): the committer's branch is
+ *    passed to checkLock, whose `branch IS ?` filter null-safely matches a
+ *    branchless lock to a branchless committer — no re-comparison here.
  *  - A live lock on a DIFFERENT branch does not block, consistent with M2.5's
- *    cross-branch warn-not-block decision.
+ *    cross-branch warn-not-block decision — the filter simply never returns it.
  *
  * The attribution limit (daemon/classify.ts) does NOT apply here: we are not
  * guessing who made an edit — we are refusing to commit over someone's
- * declared live claim. The BRANCH limit does carry over: checkLock is
- * path-level within the repo and returns one row, so the branch comparison
- * happens in this module against that returned lock row.
+ * declared live claim. The BRANCH limit is RESOLVED for this consumer (M5.1b):
+ * with coexisting per-branch locks on one path, the branch-filtered checkLock
+ * deterministically returns the committer's-branch row (or none) instead of an
+ * arbitrary branch's row.
  *
  * Pure and synchronous: no git, no fs, no config — branch and sessionId are
  * injected by the caller (M5.2), and the only I/O is checkLock per staged path.
@@ -60,10 +61,11 @@ export function checkCommit(
   const conflicts: CommitConflict[] = [];
 
   for (const path of input.stagedPaths) {
-    const result = checkLock(db, input.repoRoot, path);
+    // input.branch is string|null, never undefined → the lookup ALWAYS
+    // branch-filters; cross-branch locks are excluded before we ever see them.
+    const result = checkLock(db, input.repoRoot, path, input.branch);
     if (!result.held) continue; // free, or expired (checkLock's liveness)
     if (result.lock.session_id === input.sessionId) continue; // own claim
-    if (result.lock.branch !== input.branch) continue; // cross-branch: no block
     conflicts.push({ path, lock: result.lock });
   }
 

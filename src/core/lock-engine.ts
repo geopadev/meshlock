@@ -245,18 +245,39 @@ export function releaseLock(db: MeshLockDatabase, input: ReleaseInput): boolean 
 /**
  * Report the current holder of `path` within `repoRoot`. A lock whose
  * expires_at <= now counts as free.
+ *
+ * `branch` follows the SAME three-way convention as changes.ts getChanges —
+ * the two per-path lookups stay deliberately symmetric:
+ *  - omitted (undefined): no branch filter — the historical any-branch lookup.
+ *    With coexisting per-branch locks (UNIQUE permits one live row per branch)
+ *    the returned row is ARBITRARY; fine for "is anything holding this path?"
+ *    consumers (daemon classify, the check_lock tool), wrong for any per-branch
+ *    decision — those must pass `branch`.
+ *  - a string: only that branch's lock.
+ *  - explicit null: only a branchless lock (NULL-means-branchless, as in the
+ *    (repo_root, path, branch) lock identity).
+ * The filter is `branch IS ?`, never `=` — SQL three-valued logic makes
+ * `= NULL` match nothing (the M2.5 rule, same as every branch comparison here).
  */
 export function checkLock(
   db: MeshLockDatabase,
   repoRoot: string,
-  path: string
+  path: string,
+  branch?: string | null
 ): CheckResult {
   const now = nowIso();
-  const row = db
-    .prepare<[string, string], Lock>(
-      "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ?"
-    )
-    .get(repoRoot, path);
+  const row =
+    branch === undefined
+      ? db
+          .prepare<[string, string], Lock>(
+            "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ?"
+          )
+          .get(repoRoot, path)
+      : db
+          .prepare<[string, string, string | null], Lock>(
+            "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"
+          )
+          .get(repoRoot, path, branch);
 
   if (!row || row.expires_at <= now) {
     return { held: false };

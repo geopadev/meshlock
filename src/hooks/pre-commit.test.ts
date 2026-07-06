@@ -138,3 +138,32 @@ describe("checkCommit", () => {
     expect(checkCommit(db, input([]))).toEqual({ allowed: true });
   });
 });
+
+describe("checkCommit — multi-branch coexisting locks (M5.1b)", () => {
+  const path = "/repos/alpha/src/multi.ts";
+
+  it("allows a 'main' committer when the only live foreign lock is on 'feature'", () => {
+    // Pre-M5.1b this was the flaky-allow scenario: an unfiltered checkLock
+    // could hand back any row. Branch-filtered, "main" simply finds no lock.
+    seedLive(REPO_A, path, OTHER, "feature");
+
+    expect(checkCommit(db, input([path], "main"))).toEqual({ allowed: true });
+  });
+
+  it("blocks a 'main' committer with the MAIN row when foreign locks coexist on both branches", () => {
+    // 'feature' seeded FIRST: an unfiltered lookup would land on that row by
+    // scan order and wrongly wave the commit through — the gap M5.1b closes.
+    seedLive(REPO_A, path, OTHER, "feature");
+    seedLive(REPO_A, path, OTHER, "main");
+
+    const verdict = checkCommit(db, input([path], "main"));
+
+    expect(verdict.allowed).toBe(false);
+    if (!verdict.allowed) {
+      expect(verdict.conflicts).toHaveLength(1);
+      expect(verdict.conflicts[0]!.path).toBe(path);
+      expect(verdict.conflicts[0]!.lock.branch).toBe("main");
+      expect(verdict.conflicts[0]!.lock.session_id).toBe(OTHER);
+    }
+  });
+});
