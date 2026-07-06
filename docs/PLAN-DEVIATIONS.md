@@ -309,8 +309,24 @@ recording + acquire briefing (the payoff).
   (was 78, +6: keystone refresh-preserve, initial-store, null/omitted, expired-takeover; +2 tool tests).
   Fragile seam: refresh-preservation depends on reading `same.content_snapshot` BEFORE
   `deleteSame.run()` — the keystone test is the tripwire if that ordering is ever disturbed.
-- 📋 **M3.5c [architect-invented]:** release diffs snapshot-vs-current + records the change_log row
-  (+ optional agent summary); acquire briefs the next holder from getChanges. The payoff.
+- ✅ **M3.5c [architect-invented]:** the payoff — release records, acquire briefs. `release-lock.ts`:
+  `checkLock` (read baseline + branch BEFORE `releaseLock` deletes the row) → release → if
+  `released && held.held`, binary-guard then `diffContent(snapshot ?? "", current ?? "")` →
+  `recordChange`. New optional `summary` input (zod `.optional()`, passthrough). `acquire-lock.ts`:
+  after a successful acquire, `getChanges({repoRoot, path, branch, limit:5})` appended as a "Recent
+  changes" block (diffPreview/formatChange helpers; headline = diff_stat ?? summary ?? diff preview;
+  empty history → no section). Binary guard = NUL byte either side → skip diff+record (no row, no
+  error), AT THE TOOL not in diffContent (single responsibility). Empty diff = the floor, recorded.
+  Engine untouched. 91 tests (was 84, +7). **M3.5 (change briefing) COMPLETE end-to-end: capture →
+  diff → record → brief. The differentiator works.**
+
+**Follow-ons spawned by M3.5c (NOT done here):**
+- **[gap]** Expired-but-owned release records nothing: `checkLock` reports an expired lock as free, so
+  there's no live baseline to diff — a session that lets its lock lapse then releases loses the change
+  record. Fix sketch: have `releaseLock` return the row it deleted (incl. snapshot) so the tool doesn't
+  depend on `checkLock`'s liveness view. Engine change — weigh against purity.
+- **[chore, low priority]** `readCurrentContent` (release) and `captureSnapshot` (acquire) are
+  near-identical utf-8-read-or-null helpers; DRY into a shared util.
 
 **Follow-ons spawned by M3.5b (NOT done here):**
 - **[M3.5c]** Binary files: `captureSnapshot` does `readFileSync(path,"utf-8")`, which decodes binary
@@ -324,10 +340,11 @@ recording + acquire briefing (the payoff).
   `listLocks` that omits the column (only `checkLock` needs it, for M3.5c's release-time diff).
 
 **Follow-ons spawned by M3.5a (NOT done here):**
-- **[M3.5c]** Diff header noise: `diffContent` output carries absolute scratch temp paths in the
-  `---`/`+++`/`diff --git` header lines. Decide at M3.5c where normalization lives — lean: give
-  `diffContent` an optional logical-path label so headers show the real path, supplied at the call
-  site that has it. The raw stored diff is fine until it is actually surfaced to an agent.
+- **[M8/M9]** Diff header noise: stored diffs still embed `git diff --no-index` absolute temp-path
+  headers (`---`/`+++`/`diff --git`). M3.5c worked around it for the acquire briefing by filtering to
+  +/- lines in `diffPreview`, but the STORED diff is still noisy. Fine while the only consumer is the
+  briefing preview; normalize at capture (before `recordChange`) before any other consumer reads the
+  raw stored diff — the relay sync (M8) or the VS Code panel (M9).
 - **[M3.5b/c]** `diff_stat` column exists but nothing computes it (always NULL today) — intentional
   per spec; compute it at capture in M3.5b/c. Tracked so the empty column isn't mistaken for a bug.
 - **[CLAUDE.md]** Add a `changes` commit scope — the briefing subsystem (changes.ts / diff.ts /
@@ -338,8 +355,44 @@ recording + acquire briefing (the payoff).
 
 ---
 
-## M4–M10 — not yet reached
-- 📋 **M4** Watcher daemon (chokidar) + `daemon/index.ts`
+## M4 — Watcher daemon  🔨
+**Plan says:** watcher daemon (chokidar) + `daemon/index.ts`. One milestone.
+
+**Split [architect-invented]:** M4.1 = watcher core (chokidar wrap, debounce, normalized events — no
+lock logic) → M4.2 = lock-aware classification (event → guarded/unguarded) → M4.3 = daemon process +
+CLI wiring + config + logging policy. Sensor-first de-risks the async/fs machinery before lock
+semantics enter (same play as M3.1). Builder = Fable 5 (sprint), teaching passes skipped →
+docs/TEACHING-BLOCK.md.
+
+**We did:**
+- ✅ **M4.1 [architect-invented]** (Fable 5): `daemon/watcher.ts` — `createWatcher(root, onEvent,
+  options?) → {ready, close()}`. Per-path debounce timers (default 100ms) coalesce bursts to one
+  `{type: add|change|unlink, path, at}` event; within a window last type wins EXCEPT add→change stays
+  "add" (creation burst). Segment-name ignore defaults `.git`/`node_modules`/`.meshlock` (the last so
+  the daemon never feeds on its own SQLite/WAL writes) — config-free by design. `ignoreInitial: true`
+  (startup files are state, not events). No-op `error` listener (an unhandled chokidar error would
+  kill the process; logging policy is M4.3's). `close()` cancels pending timers (drops, not flushes).
+  Pure sensor: no DB/config/lock imports; root+callback injected. 5 real-fs tests incl. burst-coalesce
+  and a control-write proving ignored-silence ≠ broken. 96 tests (was 91, +5). New dep chokidar ^4.0.3
+  (node:fs.watch non-recursive/unreliable; @parcel/watcher needs native build). Additive improvements
+  accepted: `ready` promise, add→change coalesce rule, cross-platform segment split.
+- 📋 **M4.2 [architect-invented]:** lock-aware classification — a WatchEvent + the locks table →
+  guarded/unguarded verdict.
+- 📋 **M4.3 [architect-invented]:** daemon process, CLI wiring, config, error/logging policy.
+
+**Follow-ons spawned by M4.1 (NOT done here):**
+- **[M4.3]** Watcher errors are absorbed by a no-op listener; real surfacing/logging policy lands with
+  the daemon process.
+- **[M4.2/M4.3]** add→unlink within one debounce window emits `unlink` for a file observers never saw
+  added (transient temp files). Consider cancelling the pair to nothing.
+- **[M4.3]** `options.ignore` REPLACES defaults — passing `["dist"]` silently re-enables watching
+  `.git`/`node_modules`. Decide merge semantics or an `ignoreDefaults` flag when config wires in.
+- **[M4.3]** Segment-name matching ignores ANY dir named `.git`/`node_modules`/`.meshlock` anywhere
+  under root — over-broad if user content uses those names. Revisit when the daemon knows real paths.
+
+---
+
+## M5–M10 — not yet reached
 - 📋 **M5** Git pre-commit hook
 - 📋 **M6** CLI + run wrapper
 - 📋 **M7** Web dashboard (buffer milestone — can ship minimal if schedule tight)
@@ -351,14 +404,13 @@ recording + acquire briefing (the payoff).
 
 ## Current position
 
-**Active milestone:** 🔨 **M3.5 (change briefing) IN PROGRESS.** M3.5a (storage foundation) and M3.5b
-(acquire-time snapshot capture) ✅ DONE. 84 tests. → 📋 **M3.5c next** (release diffs + records the
-change_log row; acquire briefs the next holder — the payoff sub-task). M3 (MCP server) complete and
-proven live. Promotion unblocked; George holding for the M3.5 ship / Show HN inflection point.
+**Active milestone:** 🔨 **M4 (watcher daemon) IN PROGRESS** — M4.1 (watcher core) ✅ DONE, 96 tests.
+→ 📋 **M4.2 next** (lock-aware classification: WatchEvent + locks table → guarded/unguarded).
+M3.5 complete end-to-end; the differentiator works. Fable-5 sprint Builder; teaching accumulating in
+docs/TEACHING-BLOCK.md. Promotion: M3.5-ship clip play remains open; Show HN held for install-ready.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, **M3.5b**. 84 tests. The differentiator's storage floor + the
-acquire-side baseline are both in; M3.5c connects them into an actual briefing.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, **M4.1**. 96 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 

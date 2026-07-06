@@ -47,6 +47,11 @@ change history forever. Needs an age- or count-based prune eventually (e.g. keep
 path, or drop records older than X days). Not urgent at solo/manual-release cadence; revisit when the
 M4 watcher makes capture continuous and the table can grow without bound.
 
+## chokidar v5 bump (noted at M4.1)
+chokidar 5.0.0 exists on the registry; M4.1 pinned `^4.0.3` deliberately (spec-driven, API verified by
+smoke test). Make a conscious bump decision post-M4 — check the v5 changelog for `ignored`-function /
+`ready` / absolute-path behaviour changes before moving.
+
 ## Phase-2 / post-September
 - AgentMesh full hub (prompt engine, pipeline tools, multi-team)
 - MeshLearn (learning-as-you-build product)
@@ -90,6 +95,19 @@ M4 watcher makes capture continuous and the table can grow without bound.
   session. A blocked agent wants to know "until when" to decide whether to wait or
   back off. (Surfaced in live stress test A — denial names the holder + gives guidance
   but not the expiry.) Small UX win.
+
+## No-op change records — floor vs noise (decision, M3.5c)
+M3.5a's "diff is the floor" means release records an empty-diff row even when nothing changed, so a
+read-only lock cycle leaves a "(no content change)" entry that shows up in the next acquirer's
+briefing. Decision: keep the honest floor (every release leaves a trace) OR suppress empty diffs at
+release to cut briefing noise. One-line lever: skip `recordChange` when `diff === ""` in release-lock.ts.
+Lean: suppress — a no-op release isn't worth briefing — but it's a product call. Confirm before changing.
+
+## Binary detection heuristic — imperfect by design (M3.5c)
+Binary guard = "current or snapshot contains a NUL byte" (skip diff+record). Standard and cheap, but a
+valid-UTF-8-but-non-source file, or one whose NUL falls outside the read window, is mis-classified.
+Acceptable for now; revisit with a real content-type check (e.g. file signature / git's own binary
+detection) if mis-classification bites.
 
 ## Change-briefing storage / perf optimization (noted at M3.5a/b, revisit if files get large or capture goes hot)
 - M3.5a stores the full acquire-time file content as `locks.content_snapshot` for per-agent diff

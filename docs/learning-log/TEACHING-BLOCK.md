@@ -100,4 +100,44 @@ of this once Fable access ends.
 
 ---
 
-<!-- Fable-sprint milestones (M4+) append below as they're reviewed. -->
+## M4.1 — watcher core (`daemon/watcher.ts`)
+
+### TS syntax
+- **`export type WatchEventType = "add" | "change" | "unlink"`** — a union of string LITERALS. In JS
+  you'd pass any string and typo silently; here `schedule("chnage", p)` is a compile error. The type is
+  the whitelist.
+- **`ReturnType<typeof setTimeout>`** — a utility type: "whatever setTimeout returns." Used because
+  Node's setTimeout returns a `Timeout` object while the browser's returns a number; this stays correct
+  in both without naming either.
+- **`Map<string, {timer; type}>`** — generics on built-ins: TS knows `pending.get(path)` yields
+  `{timer, type} | undefined`, which forces the `if (prev)` check (narrowing again).
+- **`options: WatcherOptions = {}` + `options.debounceMs ?? DEFAULT`** — the optional-object-with-
+  defaults pattern; `??` (not `||`) so a legitimate `0` wouldn't be clobbered.
+- **Closure state.** `pending`, `closed`, `schedule` live in `createWatcher`'s closure — a factory
+  returning a handle over private state. Same JS pattern you know; TS just types the handle
+  (`WatcherHandle`).
+
+### Concepts
+- **Debounce, per-path.** Editors write in bursts (write+truncate+metadata). Each raw event restarts
+  THAT PATH's timer; only after `debounceMs` of quiet does one normalized event fire. Per-path timers
+  mean a busy file never suppresses a different file's events. Coalesce rule: last type wins, except
+  add→change stays "add" (the trailing change is part of the creation burst).
+- **Pure sensor / DI again.** The watcher knows files, not locks — no DB/config imports; root and
+  callback injected. Same discipline as the engine: side effects at the edges, logic testable with a
+  temp dir and an array.
+- **`ignoreInitial: true`** — files existing at startup are STATE, not EVENTS. Replaying them would
+  flood the daemon with thousands of fake "adds" on boot.
+- **Why `.meshlock` is ignored** — the daemon must not feed on its own SQLite/WAL writes (a feedback
+  loop: observe own write → process → write → observe…).
+- **The no-op error listener.** An EventEmitter "error" with no listener THROWS and kills the process —
+  so an empty handler is load-bearing, not laziness. Policy (log where? warn who?) is deferred to the
+  daemon layer (M4.3) because the sensor has no logging opinion.
+- **Async teardown.** `close()` cancels pending timers (drops, doesn't flush — after close the caller
+  must hear nothing) then awaits chokidar's close. Leaked watchers keep the event loop alive → vitest
+  "open handle" warnings; hence close-in-afterEach BEFORE deleting the temp dir.
+- **Test technique:** poll-based `waitFor(predicate)` + a settle window instead of fixed sleeps
+  (less flaky); a CONTROL WRITE in the ignore test so "no events" proves "ignored," not "broken."
+
+---
+
+<!-- Fable-sprint milestones append below as they're reviewed. -->
