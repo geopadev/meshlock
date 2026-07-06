@@ -236,4 +236,34 @@ of this once Fable access ends.
 
 ---
 
+## M5.1b — checkLock branch filter (`lock-engine.ts`, `hooks/pre-commit.ts`)
+
+### TS syntax
+- **`branch?: string | null` — the full three-state optional.** Omitted → `undefined` → any-branch;
+  a string → that branch; explicit `null` → branchless only. The API works BECAUSE null ≠ undefined in
+  JS — third place the project leans on it (getChanges filter, ChangeQuery, now checkLock). If TS had
+  only one "empty" value, this API couldn't exist in this shape.
+- **`branch === undefined ? queryA : queryB`** — branching to two different prepared statements rather
+  than one clever SQL string. Two honest queries beat one query with conditional-clause gymnastics;
+  each is independently readable and the omitted path stays byte-identical (zero risk to old callers).
+
+### Concepts
+- **`IS ?` vs `= ?`, the recurring SQL rule.** Under three-valued logic `NULL = NULL` is not true, so
+  a `= ?` filter bound to null silently matches nothing. `IS ?` treats null as comparable. Contrast with
+  JS where `null === null` IS true — M5.1's hook used the JS side of this; M5.1b moved the comparison
+  into SQL and had to switch operators. Same rule, per-language operator.
+- **Additive API change.** An optional trailing param means zero callers change to compile — classify
+  and check_lock keep their any-branch semantics untouched, the hook opts in. When a fix can be additive,
+  it should be: the blast radius is exactly the callers who need the new behaviour.
+- **Fix the lookup, not the caller.** M5.1 compared branches AFTER an arbitrary fetch — unfixable at the
+  caller because the wrong row is already in hand. Determinism had to move INTO the query. General rule:
+  nondeterministic selection can't be patched downstream.
+- **Pin old behaviour when changing near it.** The "omitted still returns SOME live row" test exists so
+  the historical semantics are asserted, not assumed — the next refactor can't silently change them.
+- **Finds cascade.** Closing the arbitrary-row gap exposed the next one (expired-arbitrary-row under the
+  omitted path). Each fix narrows the question enough to see the next flaw — that's the review loop
+  working, not churn.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->
