@@ -321,10 +321,10 @@ recording + acquire briefing (the payoff).
   diff → record → brief. The differentiator works.**
 
 **Follow-ons spawned by M3.5c (NOT done here):**
-- **[gap]** Expired-but-owned release records nothing: `checkLock` reports an expired lock as free, so
-  there's no live baseline to diff — a session that lets its lock lapse then releases loses the change
-  record. Fix sketch: have `releaseLock` return the row it deleted (incl. snapshot) so the tool doesn't
-  depend on `checkLock`'s liveness view. Engine change — weigh against purity.
+- **[gap → SUPERSEDED by M5.1c]** Expired-but-owned release records nothing (no live baseline via
+  checkLock), AND (found at M5.1) multi-branch coexistence can hand release a FOREIGN row to baseline
+  against. Both fixed by M5.1c: `releaseLock` returns the row(s) it deleted; the tool consumes that
+  instead of checkLock.
 - **[chore, low priority]** `readCurrentContent` (release) and `captureSnapshot` (acquire) are
   near-identical utf-8-read-or-null helpers; DRY into a shared util.
 
@@ -427,8 +427,44 @@ docs/TEACHING-BLOCK.md.
 
 ---
 
-## M5–M10 — not yet reached
-- 📋 **M5** Git pre-commit hook
+## M5 — Git pre-commit hook  🔨
+**Plan says:** pre-commit hook blocking commits over others' locks. One milestone.
+
+**Split [architect-invented]:** M5.1 = pure decision logic → **M5.1b = checkLock branch filter
+(engine gap found by M5.1)** → **M5.1c = releaseLock returns deleted row (same gap's release-side
+fix)** → M5.2 = shell shim + installer + CLI.
+
+**We did:**
+- ✅ **M5.1 [architect-invented]** (Fable 5): `hooks/pre-commit.ts` — `checkCommit(db, {repoRoot,
+  branch, sessionId, stagedPaths}) → HookVerdict` (discriminated union; blocked variant carries ALL
+  conflicts + full lock rows). Rule: block iff live ∧ foreign ∧ same-branch (JS null===null
+  reproduces the engine's `branch IS ?`); cross-branch passes (M2.5 consistency); own locks never
+  block. 8 synthetic tests incl. the three silent-wrong risks. Folded chore: DEFAULT_DEBOUNCE_MS
+  100→200 (e2e-verified: touch+rm now zero events). 115 tests (was 107, +8).
+- 📋 **M5.1b [architect-invented] — NEXT:** `checkLock` gains optional `branch` filter; hook passes
+  the committer's branch. **Why (the M5.1 find):** checkLock is `.get()` with no branch filter/ORDER
+  BY — with multi-branch coexisting locks (UNIQUE permits one per branch) the hook receives an
+  ARBITRARY row and can wrongly allow, flakily by insertion order. An enforcement gate cannot ship
+  on that. classify stays path-level DELIBERATELY (any-branch lock = guarded is right for a warn
+  daemon; branch is dynamic mid-run).
+- 📋 **M5.1c [architect-invented]:** `releaseLock` returns the deleted row(s); release tool consumes
+  it instead of checkLock. Fixes BOTH release-side holes in one move: (a) multi-branch: checkLock
+  can hand release ANOTHER session's other-branch row → diff against a foreign baseline recorded
+  under our session; (b) the expired-but-owned lost-record follow-on from M3.5c (supersedes that
+  entry's fix sketch).
+- 📋 **M5.2 [architect-invented]:** shell shim + installer + CLI wiring. SEAM (from M5.1 issue #3):
+  the shim converts repo-relative staged paths to the EXACT absolute strings locks record — S1c
+  realpath discipline applies; goes verbatim into the prompt.
+
+**Follow-ons spawned by M5.1 (NOT done here):**
+- **[perf, low]** One synchronous checkLock per staged path — a thousand-file commit pays a thousand
+  point queries; a single `WHERE path IN (…)` pass exists if it ever matters.
+- **[note]** Watcher suite runtime ~5.9s (was ~3.2s) — settle waits scale with the doubled debounce.
+  Known trade, not drift; revisit only if suite time becomes a drag.
+
+---
+
+## M6–M10 — not yet reached
 - 📋 **M6** CLI + run wrapper
 - 📋 **M7** Web dashboard (buffer milestone — can ship minimal if schedule tight)
 - 📋 **M8** Relay client + free self-host relay (+ team change-briefing sync)
@@ -439,14 +475,13 @@ docs/TEACHING-BLOCK.md.
 
 ## Current position
 
-**Active milestone:** ✅ **M4 (watcher daemon) COMPLETE** — sensor (M4.1) → judge (M4.2) → policy
-(M4.3): `meshlock watch` detects unguarded edits live. 107 tests. → 📋 **M5 next per v6** (git
-pre-commit hook — first ENFORCEMENT layer; the daemon warns, the hook blocks). After M5+M6 the tool
-is install-ready — the Show HN trigger per the promotion plan. Fable-5 sprint Builder; teaching
-accumulating in docs/TEACHING-BLOCK.md.
+**Active milestone:** 🔨 **M5 (pre-commit hook) IN PROGRESS** — M5.1 (decision logic) ✅ DONE, 115
+tests, and it surfaced the sprint's find: checkLock's arbitrary-row shape defeats the gate under
+multi-branch coexistence. → 📋 **M5.1b next** (checkLock branch filter), then M5.1c (releaseLock
+returns deleted row), then M5.2 (shim + installer). Fable-5 sprint; teaching → TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, **M4.3**. 107 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, **M5.1**. 115 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 

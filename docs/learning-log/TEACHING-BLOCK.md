@@ -205,4 +205,35 @@ of this once Fable access ends.
 
 ---
 
+## M5.1 — pre-commit decision logic (`hooks/pre-commit.ts`)
+
+### TS syntax
+- **Narrowing on the NEGATIVE variant.** `if (!verdict.allowed) { verdict.conflicts... }` — the
+  discriminated union narrows both ways: `allowed: false` proves `conflicts` exists, `allowed: true`
+  proves it doesn't. Third module using the pattern (AcquireResult, Verdict, now HookVerdict) — it's the
+  project's house style for "result with reasons."
+- **`null === null` is `true` in JS.** The one-line branch rule `result.lock.branch !== input.branch`
+  works for branchless-vs-branchless because JS strict equality on two nulls is true — deliberately
+  reproducing SQL's `branch IS ?` in JS. Contrast: in SQL, `NULL = NULL` is NOT true (three-valued
+  logic); `IS` exists for exactly that. Same rule, two languages, two different operators.
+- **`continue` as rule-listing.** The loop body is three guard-continues (free/expired, own, cross-
+  branch) then a push — each rule one line, readable as the spec itself.
+
+### Concepts
+- **Warn layer vs enforce layer.** The daemon (M4) warns and must tolerate ambiguity; the hook BLOCKS
+  and must not. That asymmetry is why classify may stay path-level ("locked on any branch = guarded" is
+  fine for a warning) but the hook's arbitrary-row exposure was a shippable-blocking bug.
+- **The find: `.get()` without a filter is a hidden decision.** checkLock returns ONE arbitrary row of
+  possibly several (one live lock per branch is legal). Every consumer inherited that silently: the hook
+  could be handed the non-blocking branch's row (wrongly allow), release could be handed a FOREIGN row
+  (diff against someone else's baseline). Lesson: an API returning "one of possibly many, unspecified
+  which" bakes nondeterminism into every caller — either filter (M5.1b) or return all.
+- **Collect all conflicts, don't fail-fast.** One failed commit shows the full fix list. Error UX rule:
+  when a human must act on failures, report the complete set, not the first.
+- **Mirror-don't-reinvent has limits.** The spec said mirror the engine; the Builder did, then flagged
+  that the mirror reflects a flaw. Correct behaviour on both counts: follow the spec, surface what the
+  spec inherits.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->
