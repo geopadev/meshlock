@@ -47,6 +47,12 @@ change history forever. Needs an age- or count-based prune eventually (e.g. keep
 path, or drop records older than X days). Not urgent at solo/manual-release cadence; revisit when the
 M4 watcher makes capture continuous and the table can grow without bound.
 
+## Nested repos / git submodules — out of scope for v1 (decided at M4.2)
+The daemon resolves ONE repoRoot at startup and classifies every event against it. A root containing
+nested repos (submodules) misattributes the nested repo's events to the outer root. Architect call:
+acceptable for v1 — one daemon = one repo. Revisit only if a real submodule user appears; the fix
+shape would be per-event root resolution (cached) or one daemon per nested root.
+
 ## chokidar v5 bump (noted at M4.1)
 chokidar 5.0.0 exists on the registry; M4.1 pinned `^4.0.3` deliberately (spec-driven, API verified by
 smoke test). Make a conscious bump decision post-M4 — check the v5 changelog for `ignored`-function /

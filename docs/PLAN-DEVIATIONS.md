@@ -376,15 +376,30 @@ docs/TEACHING-BLOCK.md.
   and a control-write proving ignored-silence ≠ broken. 96 tests (was 91, +5). New dep chokidar ^4.0.3
   (node:fs.watch non-recursive/unreliable; @parcel/watcher needs native build). Additive improvements
   accepted: `ready` promise, add→change coalesce rule, cross-platform segment split.
-- 📋 **M4.2 [architect-invented]:** lock-aware classification — a WatchEvent + the locks table →
-  guarded/unguarded verdict.
+- ✅ **M4.2 [architect-invented]** (Fable 5): `daemon/classify.ts` — `Verdict` discriminated union
+  (`guarded` + live `Lock` row attached / `unguarded`, both carrying the full WatchEvent through so
+  M4.3 policy can special-case delete-under-lock without re-querying) + `classifyEvent(db, repoRoot,
+  event)`: one `checkLock` call, pure/synchronous, repoRoot injected. Expired ⇒ unguarded (checkLock
+  treats expired as free); cross-repo isolation holds (S1). Two limits documented inline: attribution
+  (live lock ≠ holder made this edit — OS events carry no identity; parked at M8) and branch (guarded
+  = locked on SOME branch; checkLock is path-level). 5 synthetic tests, real SQLite, no chokidar.
+  101 tests (was 96, +5). Fragile seam flagged by Builder: if checkLock ever becomes branch-aware,
+  covered edits flip to false "unguarded" — the cross-repo test is the template for that milestone's
+  branch-dimension test.
 - 📋 **M4.3 [architect-invented]:** daemon process, CLI wiring, config, error/logging policy.
+
+**Follow-ons spawned by M4.2 (NOT done here):**
+- **[M4.3]** Per-event `checkLock` is fine at human editing rates but a bulk op (branch switch,
+  `pnpm install`) hammers SQLite with thousands of lookups — consider batching/rate-limiting upstream
+  in the daemon loop.
 
 **Follow-ons spawned by M4.1 (NOT done here):**
 - **[M4.3]** Watcher errors are absorbed by a no-op listener; real surfacing/logging policy lands with
   the daemon process.
-- **[M4.2/M4.3]** add→unlink within one debounce window emits `unlink` for a file observers never saw
-  added (transient temp files). Consider cancelling the pair to nothing.
+- **[M4.3 — DO IT]** add→unlink within one debounce window emits `unlink` for a file observers never
+  saw added (transient temp files). M4.2 upgraded this from cosmetic to real: such a bare `unlink` on
+  a locked path yields a false delete-under-lock verdict. Fix in M4.3: cancel the add→unlink pair to
+  nothing in the watcher's coalesce rule.
 - **[M4.3]** `options.ignore` REPLACES defaults — passing `["dist"]` silently re-enables watching
   `.git`/`node_modules`. Decide merge semantics or an `ignoreDefaults` flag when config wires in.
 - **[M4.3]** Segment-name matching ignores ANY dir named `.git`/`node_modules`/`.meshlock` anywhere
@@ -404,13 +419,12 @@ docs/TEACHING-BLOCK.md.
 
 ## Current position
 
-**Active milestone:** 🔨 **M4 (watcher daemon) IN PROGRESS** — M4.1 (watcher core) ✅ DONE, 96 tests.
-→ 📋 **M4.2 next** (lock-aware classification: WatchEvent + locks table → guarded/unguarded).
-M3.5 complete end-to-end; the differentiator works. Fable-5 sprint Builder; teaching accumulating in
-docs/TEACHING-BLOCK.md. Promotion: M3.5-ship clip play remains open; Show HN held for install-ready.
+**Active milestone:** 🔨 **M4 (watcher daemon) IN PROGRESS** — M4.1 (watcher core) + M4.2 (lock-aware
+classification) ✅ DONE, 101 tests. → 📋 **M4.3 next** (daemon process + CLI + error/logging policy —
+closes M4). Fable-5 sprint Builder; teaching accumulating in docs/TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, **M4.1**. 96 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, **M4.2**. 101 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 

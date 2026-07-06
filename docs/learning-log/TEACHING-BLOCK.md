@@ -140,4 +140,36 @@ of this once Fable access ends.
 
 ---
 
+## M4.2 — lock-aware classification (`daemon/classify.ts`)
+
+### TS syntax
+- **Discriminated union, consumed.** `Verdict = {kind:"guarded"; event; lock} | {kind:"unguarded";
+  event}` — same pattern as the engine's `AcquireResult`. The magic is at the USE site: after
+  `if (verdict.kind === "guarded")`, TS narrows the type so `verdict.lock` exists in that branch and is
+  a compile ERROR in the other. In JS you'd check a string and hope the fields are there; TS proves it.
+  The tests use exactly this (`if (verdict.kind === "guarded") { verdict.lock... }`).
+- **`WatchEvent["type"]`** (in the test helper) — an indexed-access type: "the type of the `type` field
+  of WatchEvent," i.e. the add/change/unlink union, without restating it. Rename the union, the helper
+  follows.
+- **`import type` again** — classify imports the `Lock`/`WatchEvent`/db TYPES plus one runtime function
+  (`checkLock`). Note the mix: `import { checkLock, type Lock }` pulls one value and one type from the
+  same module.
+
+### Concepts
+- **Sensor / judge / policy separation.** M4.1 sees (files), M4.2 judges (guarded/unguarded), M4.3 acts
+  (what to do about it). Each layer is testable alone: classify's tests need a DB and a synthetic event
+  object — no chokidar, no timers, no real fs.
+- **Carry the evidence, don't re-query.** Both variants carry the full event; guarded also carries the
+  lock row. M4.3's policy can distinguish delete-under-lock or read the holder/expiry without a second
+  lookup. Design rule: the layer that fetched the data hands it forward.
+- **Reuse the engine's semantics, don't restate them.** classify calls `checkLock`, so "expired = free"
+  is decided in ONE place (the engine). If classify re-implemented expiry math, the two could drift.
+- **Honest-limits doc-commenting.** Attribution (no OS identity on writes → guarded ≠ holder-did-this;
+  M8) and branch blindness (guarded = locked on SOME branch) are written INLINE at the type, so the next
+  reader can't over-trust the verdict. Naming what a component does NOT know is part of its contract.
+- **Test technique:** `seedExpired` INSERTs the row directly because `acquireLock` can't create the
+  past — when the public API can't produce a state you must test, go under it deliberately (and say so).
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->
