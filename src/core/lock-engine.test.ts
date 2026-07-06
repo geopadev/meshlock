@@ -42,14 +42,15 @@ function seedLock(
   expiresAt: string,
   acquiredAt = "2000-01-01T00:00:00.000Z",
   mode = "exclusive",
-  repoRoot = REPO_A
+  repoRoot = REPO_A,
+  branch: string | null = null
 ): void {
   conn
     .prepare(
-      `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
-    .run(repoRoot, path, sessionId, mode, acquiredAt, expiresAt);
+    .run(repoRoot, path, sessionId, mode, acquiredAt, expiresAt, branch);
 }
 
 function rowCount(conn: MeshLockDatabase, path?: string): number {
@@ -217,23 +218,91 @@ describe("releaseLock — ownership", () => {
       timeoutSeconds: 1800,
     });
 
-    // B does not own it: nothing removed.
+    // B does not own it: nothing removed, nothing returned.
     expect(
       releaseLock(db, { repoRoot: REPO_A, path: "/repo/file.ts", sessionId: SESSION_B })
-    ).toBe(false);
+    ).toEqual([]);
     expect(rowCount(db, "/repo/file.ts")).toBe(1);
 
-    // A owns it: removed.
-    expect(
-      releaseLock(db, { repoRoot: REPO_A, path: "/repo/file.ts", sessionId: SESSION_A })
-    ).toBe(true);
+    // A owns it: removed, and the deleted row comes back.
+    const deleted = releaseLock(db, {
+      repoRoot: REPO_A,
+      path: "/repo/file.ts",
+      sessionId: SESSION_A,
+    });
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.session_id).toBe(SESSION_A);
     expect(checkLock(db, REPO_A, "/repo/file.ts").held).toBe(false);
   });
 
-  it("releasing a path with no lock is a no-op returning false", () => {
-    expect(releaseLock(db, { repoRoot: REPO_A, path: "/nope", sessionId: SESSION_A })).toBe(
-      false
+  it("releasing a path with no lock is a no-op returning []", () => {
+    expect(releaseLock(db, { repoRoot: REPO_A, path: "/nope", sessionId: SESSION_A })).toEqual(
+      []
     );
+  });
+});
+
+describe("releaseLock — returns deleted rows (M5.1c)", () => {
+  const path = "/repo/released.ts";
+
+  it("returns the deleted row with its branch and baseline snapshot", () => {
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+      contentSnapshot: "BASELINE",
+    });
+
+    const deleted = releaseLock(db, { repoRoot: REPO_A, path, sessionId: SESSION_A });
+
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]!.branch).toBe("main");
+    expect(deleted[0]!.content_snapshot).toBe("BASELINE");
+    expect(rowCount(db, path)).toBe(0);
+  });
+
+  it("returns ALL of the session's per-branch rows and leaves foreign rows", () => {
+    for (const branch of ["main", "feature"]) {
+      acquireLock(db, {
+        repoRoot: REPO_A,
+        path,
+        sessionId: SESSION_A,
+        mode: "exclusive",
+        timeoutSeconds: 1800,
+        branch,
+        contentSnapshot: `base-${branch}`,
+        crossBranchMode: "ignore",
+      });
+    }
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "theirs",
+      crossBranchMode: "ignore",
+    });
+
+    const deleted = releaseLock(db, { repoRoot: REPO_A, path, sessionId: SESSION_A });
+
+    // Both of A's branch rows, each with its own baseline; B's row survives.
+    expect(deleted.map((l) => l.branch)).toEqual(["feature", "main"]); // ORDER BY branch
+    expect(deleted.map((l) => l.content_snapshot)).toEqual(["base-feature", "base-main"]);
+    expect(deleted.every((l) => l.session_id === SESSION_A)).toBe(true);
+    expect(rowCount(db, path)).toBe(1);
+  });
+
+  it("returns an EXPIRED-but-owned row (the caller can still diff its baseline)", () => {
+    seedLock(db, path, SESSION_A, "2000-01-01T00:30:00.000Z");
+
+    const deleted = releaseLock(db, { repoRoot: REPO_A, path, sessionId: SESSION_A });
+
+    expect(deleted).toHaveLength(1);
+    expect(rowCount(db, path)).toBe(0);
   });
 });
 
@@ -354,6 +423,34 @@ describe("checkLock — branch filter (M5.1b)", () => {
     const r = checkLock(db, REPO_A, path);
     expect(r.held).toBe(true);
     if (r.held) expect(r.lock.path).toBe(path);
+  });
+
+  it("omitted branch skips an EXPIRED row and reports the LIVE sibling (M5.1c)", () => {
+    // Expired 'feature' seeded FIRST — before M5.1c the unconstrained .get()
+    // picked it by scan order and reported free despite the live 'main' lock.
+    seedLock(
+      db,
+      path,
+      SESSION_B,
+      "2000-01-01T00:30:00.000Z",
+      "2000-01-01T00:00:00.000Z",
+      "exclusive",
+      REPO_A,
+      "feature"
+    );
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+      crossBranchMode: "ignore",
+    });
+
+    const r = checkLock(db, REPO_A, path);
+    expect(r.held).toBe(true);
+    if (r.held) expect(r.lock.branch).toBe("main");
   });
 });
 

@@ -30,28 +30,31 @@ function event(path: string, type: WatchEvent["type"] = "change"): WatchEvent {
 }
 
 /** Seed a live lock through the real engine. */
-function seedLive(repoRoot: string, path: string): void {
+function seedLive(repoRoot: string, path: string, branch: string | null = null): void {
   acquireLock(db, {
     repoRoot,
     path,
     sessionId: SESSION,
     mode: "exclusive",
     timeoutSeconds: 1800,
+    branch,
+    crossBranchMode: "ignore",
   });
 }
 
 /** Seed an already-expired lock directly (acquireLock can't create the past). */
-function seedExpired(repoRoot: string, path: string): void {
+function seedExpired(repoRoot: string, path: string, branch: string | null = null): void {
   db.prepare(
-    `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at)
-     VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(
     repoRoot,
     path,
     SESSION,
     "exclusive",
     "2000-01-01T00:00:00.000Z",
-    "2000-01-01T00:30:00.000Z"
+    "2000-01-01T00:30:00.000Z",
+    branch
   );
 }
 
@@ -85,6 +88,20 @@ describe("classifyEvent", () => {
 
     // An expired lock guards nothing — checkLock treats it as free.
     expect(verdict.kind).toBe("unguarded");
+  });
+
+  it("returns guarded when an EXPIRED lock coexists with a LIVE lock on another branch (M5.1c)", () => {
+    const path = "/repos/alpha/mixed.ts";
+    // Expired 'feature' seeded FIRST: before M5.1c the any-branch lookup could
+    // pick this row, report free, and raise a false UNGUARDED despite the live
+    // 'main' lock.
+    seedExpired(REPO_A, path, "feature");
+    seedLive(REPO_A, path, "main");
+
+    const verdict = classifyEvent(db, REPO_A, event(path));
+
+    expect(verdict.kind).toBe("guarded");
+    if (verdict.kind === "guarded") expect(verdict.lock.branch).toBe("main");
   });
 
   it("returns unguarded when the same path string is locked only in a DIFFERENT repo", () => {

@@ -206,6 +206,66 @@ describe("release_lock handler — change recording (M3.5c)", () => {
     expect(getChanges(db, { repoRoot, path })).toHaveLength(0);
   });
 
+  it("records a change when releasing an EXPIRED lock it owned (M5.1c — the lost-record gap)", async () => {
+    const path = join(tempDir, "expired-owned.ts");
+    await writeFile(path, "after\n");
+    // Seed an EXPIRED own lock directly, baseline snapshot intact. Before
+    // M5.1c the pre-release checkLock reported it as free, so the diff was
+    // silently dropped; the deleted row now carries the baseline out.
+    db.prepare(
+      `INSERT INTO locks (repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      repoRoot,
+      path,
+      CONFIG_SESSION,
+      "exclusive",
+      "2000-01-01T00:00:00.000Z",
+      "2000-01-01T00:30:00.000Z",
+      null,
+      "before\n"
+    );
+
+    const handler = makeReleaseLockHandler(db, makeConfig());
+    const text = firstText(await handler({ path }));
+
+    expect(text).toContain("Released");
+    const changes = getChanges(db, { repoRoot, path });
+    expect(changes).toHaveLength(1);
+    expect(changes[0]!.diff).toContain("-before");
+    expect(changes[0]!.diff).toContain("+after");
+  });
+
+  it("records one change per branch on a multi-branch release, each against its own baseline", async () => {
+    const path = join(tempDir, "per-branch.ts");
+    await writeFile(path, "current\n");
+    for (const branch of ["main", "feature"]) {
+      acquireLock(db, {
+        repoRoot,
+        path,
+        sessionId: CONFIG_SESSION,
+        mode: "exclusive",
+        timeoutSeconds: 1800,
+        branch,
+        contentSnapshot: `${branch}-base\n`,
+        crossBranchMode: "ignore",
+      });
+    }
+
+    const handler = makeReleaseLockHandler(db, makeConfig());
+    const text = firstText(await handler({ path }));
+    expect(text).toContain("Released");
+
+    // Two records total, one per branch, each diffed from that branch's baseline.
+    expect(getChanges(db, { repoRoot, path })).toHaveLength(2);
+    for (const branch of ["main", "feature"]) {
+      const changes = getChanges(db, { repoRoot, path, branch });
+      expect(changes).toHaveLength(1);
+      expect(changes[0]!.diff).toContain(`-${branch}-base`);
+      expect(changes[0]!.diff).toContain("+current");
+    }
+  });
+
   it("does not record when releasing a lock owned by another session", async () => {
     const path = join(tempDir, "not-mine.ts");
     await writeFile(path, "content\n");

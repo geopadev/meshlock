@@ -233,13 +233,37 @@ export function acquireLock(
  * not an error. Branch-agnostic (no branch filter) but repo-scoped, so it drops
  * all of the session's locks on that path within the one repo.
  *
- * @returns true if a row was actually deleted, false otherwise.
+ * Returns the row(s) it deleted (M5.1c); `[]` means nothing was released. Each
+ * returned row carries its branch and its acquire-time content_snapshot, so the
+ * caller can diff/record per branch AFTER the lock is gone — including for an
+ * EXPIRED-but-owned row (the M3.5c lost-record gap: the old boolean forced the
+ * caller to re-read the row via checkLock, which reports expired rows as free).
+ * Ownership scoping also means a caller can only ever see rows it owned.
+ *
+ * SELECT-then-DELETE runs under BEGIN IMMEDIATE for the same reason as
+ * acquireLock: the two statements must observe the same rows, with no window
+ * for another connection to change them in between.
+ *
+ * @returns the deleted rows, ordered by branch for determinism.
  */
-export function releaseLock(db: MeshLockDatabase, input: ReleaseInput): boolean {
-  const result = db
-    .prepare("DELETE FROM locks WHERE repo_root = ? AND path = ? AND session_id = ?")
-    .run(input.repoRoot, input.path, input.sessionId);
-  return result.changes > 0;
+export function releaseLock(db: MeshLockDatabase, input: ReleaseInput): Lock[] {
+  const select = db.prepare<[string, string, string], Lock>(
+    `SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks
+     WHERE repo_root = ? AND path = ? AND session_id = ?
+     ORDER BY branch`
+  );
+  const del = db.prepare(
+    "DELETE FROM locks WHERE repo_root = ? AND path = ? AND session_id = ?"
+  );
+
+  const txn = db.transaction((): Lock[] => {
+    const rows = select.all(input.repoRoot, input.path, input.sessionId);
+    if (rows.length > 0) {
+      del.run(input.repoRoot, input.path, input.sessionId);
+    }
+    return rows;
+  });
+  return txn.immediate();
 }
 
 /**
@@ -250,9 +274,10 @@ export function releaseLock(db: MeshLockDatabase, input: ReleaseInput): boolean 
  * the two per-path lookups stay deliberately symmetric:
  *  - omitted (undefined): no branch filter — the historical any-branch lookup.
  *    With coexisting per-branch locks (UNIQUE permits one live row per branch)
- *    the returned row is ARBITRARY; fine for "is anything holding this path?"
- *    consumers (daemon classify, the check_lock tool), wrong for any per-branch
- *    decision — those must pass `branch`.
+ *    the returned row is ARBITRARY among LIVE rows (M5.1c put liveness in the
+ *    WHERE); fine for "is anything holding this path?" consumers (daemon
+ *    classify, the check_lock tool), wrong for any per-branch decision — those
+ *    must pass `branch`.
  *  - a string: only that branch's lock.
  *  - explicit null: only a branchless lock (NULL-means-branchless, as in the
  *    (repo_root, path, branch) lock identity).
@@ -266,13 +291,19 @@ export function checkLock(
   branch?: string | null
 ): CheckResult {
   const now = nowIso();
+  // Omitted path: liveness must live IN the WHERE (M5.1c). With several
+  // per-branch rows, an unconstrained .get() could pick an EXPIRED row and
+  // report free while a LIVE sibling exists on another branch. The FILTERED
+  // path below has at most one candidate per branch, so its post-fetch expiry
+  // check is equivalent — left as-is. The post-fetch check stays for both
+  // paths as the belt.
   const row =
     branch === undefined
       ? db
-          .prepare<[string, string], Lock>(
-            "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ?"
+          .prepare<[string, string, string], Lock>(
+            "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ? AND expires_at > ?"
           )
-          .get(repoRoot, path)
+          .get(repoRoot, path, now)
       : db
           .prepare<[string, string, string | null], Lock>(
             "SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks WHERE repo_root = ? AND path = ? AND branch IS ?"

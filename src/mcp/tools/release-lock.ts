@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { MeshLockDatabase } from "../../core/db.js";
 import type { Config } from "../../core/config.js";
-import { checkLock, releaseLock } from "../../core/lock-engine.js";
+import { releaseLock } from "../../core/lock-engine.js";
 import { getRepoRoot } from "../../core/git.js";
 import { diffContent } from "../../core/diff.js";
 import { recordChange } from "../../core/changes.js";
@@ -60,10 +60,11 @@ function looksBinary(content: string): boolean {
  * file's directory) but still branch-agnostic: releasing a path drops all of
  * this session's locks on it across every branch in that repo (decided in M3.2b).
  *
- * M3.5c closes the change-briefing loop: BEFORE releasing we read the lock row
- * (the engine returns its content_snapshot baseline), then around the pure engine
- * call the tool does read→diff→record. The engine itself never diffs or records —
- * those are filesystem/process operations and stay in the tool (M3.5b discipline).
+ * M3.5c closes the change-briefing loop; M5.1c tightened it: releaseLock now
+ * returns the row(s) it deleted, each carrying its branch and acquire-time
+ * baseline, so the tool diffs/records AFTER the engine call with no pre-read
+ * checkLock. The engine itself never diffs or records — those are filesystem/
+ * process operations and stay in the tool (M3.5b discipline).
  */
 export function makeReleaseLockHandler(db: MeshLockDatabase, config: Config) {
   return async ({
@@ -75,26 +76,33 @@ export function makeReleaseLockHandler(db: MeshLockDatabase, config: Config) {
   }): Promise<CallToolResult> => {
     const repoRoot = await getRepoRoot(dirname(path));
 
-    // Capture the lock row (with its baseline snapshot + branch) BEFORE releasing,
-    // because releaseLock deletes it.
-    const held = checkLock(db, repoRoot, path);
-    const released = releaseLock(db, { repoRoot, path, sessionId: config.session_id });
+    // The engine hands back the row(s) it deleted (M5.1c), each with its branch
+    // and acquire-time baseline snapshot. Ownership scoping means every returned
+    // row was OURS — a foreign lock can never be diffed against here. Intended
+    // consequences of recording off the deleted rows:
+    //  - an EXPIRED-but-owned release now RECORDS (the deleted row still carries
+    //    the baseline — closes the M3.5c lost-record gap, where checkLock
+    //    reported the expired row as free and the diff was silently dropped);
+    //  - a multi-branch own release records ONE change per branch, each diffed
+    //    against that branch's own baseline.
+    const deleted = releaseLock(db, { repoRoot, path, sessionId: config.session_id });
 
-    // Record what changed — only when WE actually released a live lock we held.
-    // released === true ⇒ we owned the row; held.held ⇒ it was live, so its
-    // baseline is available. (An expired-but-owned release has no live snapshot to
-    // diff against, so it records nothing.)
-    if (released && held.held) {
-      const snapshot = held.lock.content_snapshot; // baseline at acquire (may be null)
+    if (deleted.length > 0) {
+      // One read serves every deleted row: they all name the same file — only
+      // the baselines differ per branch.
       const current = readCurrentContent(path); // content now (null if gone/unreadable)
 
-      // Binary guard: if EITHER side carries a NUL byte, skip diff+record entirely
-      // (no change_log row, no error) rather than store a corrupt diff.
-      const binary =
-        (current !== null && looksBinary(current)) ||
-        (snapshot !== null && looksBinary(snapshot));
+      for (const row of deleted) {
+        const snapshot = row.content_snapshot; // baseline at acquire (may be null)
 
-      if (!binary) {
+        // Binary guard, per row: if EITHER side carries a NUL byte, skip
+        // diff+record for THIS row (no change_log row, no error) rather than
+        // store a corrupt diff.
+        const binary =
+          (current !== null && looksBinary(current)) ||
+          (snapshot !== null && looksBinary(snapshot));
+        if (binary) continue;
+
         // diff is the FLOOR — always recorded, "" for a no-op (M3.5a). A null
         // baseline (new file) diffs against "" → all additions; a vanished current
         // file → "" → all deletions.
@@ -102,7 +110,7 @@ export function makeReleaseLockHandler(db: MeshLockDatabase, config: Config) {
         recordChange(db, {
           repoRoot,
           path,
-          branch: held.lock.branch,
+          branch: row.branch,
           sessionId: config.session_id,
           diff,
           summary: summary ?? null,
@@ -111,9 +119,10 @@ export function makeReleaseLockHandler(db: MeshLockDatabase, config: Config) {
       }
     }
 
-    const text = released
-      ? `Released lock on "${path}".`
-      : `Nothing to release on "${path}" — you don't hold a lock there.`;
+    const text =
+      deleted.length > 0
+        ? `Released lock on "${path}".`
+        : `Nothing to release on "${path}" — you don't hold a lock there.`;
 
     return { content: [{ type: "text", text }] };
   };
