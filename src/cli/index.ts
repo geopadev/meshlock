@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { fileURLToPath } from "node:url";
 import { startServer } from "../mcp/server.js";
+import { openDatabase } from "../core/db.js";
+import { getDatabasePath, loadConfig } from "../core/config.js";
+import { getRepoRoot } from "../core/git.js";
+import { startDaemon } from "../daemon/index.js";
 import {
   getClaudeConfigPath,
   registerMeshlock,
@@ -14,6 +18,7 @@ function usage(): string {
     "Commands:",
     "  init    Register the meshlock MCP server in Claude Code's user config",
     "  serve   Start the MCP server over stdio (how Claude Code launches it)",
+    "  watch   Watch the current repo and warn about edits to unlocked paths",
     "",
     "With no command, meshlock runs `serve`.",
   ].join("\n");
@@ -50,11 +55,43 @@ async function runInit(): Promise<void> {
   console.log("Restart Claude Code (or reload its MCP servers) to pick up the tools.");
 }
 
+/**
+ * Long-running detector: watch the repo containing cwd and warn (stderr) about
+ * edits to paths without a live lock. The CLI layer owns everything process-
+ * shaped — config/DB/repo assembly, signals, exit — while startDaemon stays a
+ * pure factory. The chokidar handles keep the event loop alive after main()
+ * returns; SIGINT/SIGTERM tear down watcher then DB, then exit 0.
+ */
+async function runWatch(): Promise<void> {
+  // Validate the config file up front (throws loudly on a corrupt one). The
+  // daemon consumes no config values yet — this is purely fail-fast.
+  await loadConfig();
+  const db = openDatabase(getDatabasePath());
+  const repoRoot = await getRepoRoot(process.cwd());
+  const daemon = startDaemon({ db, repoRoot }); // default sink: stderr
+
+  const shutdown = (): void => {
+    void daemon.close().then(() => {
+      db.close();
+      process.exit(0);
+    });
+  };
+  process.on("SIGINT", shutdown);
+  process.on("SIGTERM", shutdown);
+
+  await daemon.ready;
+  // Banner on stderr — stdout stays clean by project discipline.
+  process.stderr.write(`[meshlock] watching ${repoRoot} (Ctrl-C to stop)\n`);
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
     case "init":
       await runInit();
+      return;
+    case "watch":
+      await runWatch();
       return;
     case "serve":
     case undefined:

@@ -29,6 +29,13 @@ export interface WatcherOptions {
    * matches an entry exactly). REPLACES the defaults when given.
    */
   ignore?: string[];
+  /**
+   * Called when chokidar reports an error (vanished file mid-scan, permission
+   * refusal, …). The watch itself keeps running. Default: absorb silently —
+   * the M4.1 behaviour, so existing callers are unaffected; the daemon (M4.3)
+   * injects its own to surface one line per error.
+   */
+  onError?: (err: unknown) => void;
 }
 
 /** Handle returned by {@link createWatcher}. */
@@ -91,9 +98,11 @@ export function createWatcher(
 
   // Without a listener a chokidar "error" (e.g. a file vanishing mid-scan, a
   // permission hiccup) would throw as an unhandled EventEmitter error and kill
-  // the process. The watcher has no logging policy (that's the daemon's job in
-  // M4.3), so for now errors are absorbed; the watch itself keeps running.
-  watcher.on("error", () => {});
+  // the process. The watcher has no logging policy of its own — the caller
+  // decides via onError; the default absorbs silently. Either way the watch
+  // itself keeps running.
+  const onError = options.onError ?? ((): void => {});
+  watcher.on("error", onError);
 
   const schedule = (type: WatchEventType, path: string): void => {
     if (closed) return;
@@ -101,6 +110,14 @@ export function createWatcher(
     let effective = type;
     if (prev) {
       clearTimeout(prev.timer);
+      // add followed by unlink inside one window is a transient temp file:
+      // observers never saw it exist, so the pair CANCELS to nothing (M4.3
+      // fix — a bare "unlink" here would false-flag a delete-under-lock for
+      // a file that never meaningfully existed).
+      if (prev.type === "add" && type === "unlink") {
+        pending.delete(path);
+        return;
+      }
       if (prev.type === "add" && type === "change") effective = "add";
     }
     const timer = setTimeout(() => {

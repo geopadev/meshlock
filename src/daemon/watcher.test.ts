@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { chmod, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -130,5 +130,48 @@ describe("createWatcher", () => {
     await sleep(DEFAULT_DEBOUNCE_MS * 4);
 
     expect(events).toHaveLength(0);
+  });
+
+  it("delivers chokidar errors to an injected onError", async () => {
+    // An unreadable subdir makes chokidar's initial scan hit EACCES — a real,
+    // deterministic error (verified against the installed chokidar).
+    const noperm = join(tempDir, "noperm");
+    await mkdir(noperm);
+    await chmod(noperm, 0o000);
+
+    const errors: unknown[] = [];
+    try {
+      handle = createWatcher(tempDir, (e) => events.push(e), {
+        onError: (err) => errors.push(err),
+      });
+      await handle.ready;
+      await waitFor(() => errors.length >= 1);
+
+      expect(errors.length).toBeGreaterThanOrEqual(1);
+      // The watch itself survived the error: a normal write still lands.
+      const control = join(tempDir, "alive.ts");
+      await writeFile(control, "still watching\n");
+      await waitFor(() => events.some((e) => e.path === control));
+    } finally {
+      // Restore perms so afterEach's rm can traverse the dir.
+      await chmod(noperm, 0o755);
+    }
+  });
+
+  it("cancels an add followed by unlink inside one window (transient temp file)", async () => {
+    await start();
+
+    // Create and delete back-to-back — well inside one debounce window.
+    const transient = join(tempDir, "transient.tmp");
+    writeFileSync(transient, "here and gone\n");
+    rmSync(transient);
+    // Control write proves the watcher is alive, so "no transient event"
+    // means "cancelled", not "watcher broken".
+    const control = join(tempDir, "control.ts");
+    await writeFile(control, "seen\n");
+    await settle();
+
+    expect(events).toHaveLength(1);
+    expect(events[0]!.path).toBe(control);
   });
 });
