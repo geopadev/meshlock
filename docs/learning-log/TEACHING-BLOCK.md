@@ -302,4 +302,37 @@ of this once Fable access ends.
 
 ---
 
+## M5.2 — hook shim + installer + CLI (`hooks/run.ts`, `hooks/install.ts`, `cli/index.ts`)
+
+### TS syntax
+- **Result objects over thrown errors at boundaries.** `InstallHookResult` and `PreCommitRunResult`
+  are discriminated results — refusals and verdicts are DATA the CLI formats, not exceptions. The
+  house rule since AcquireResult: expected outcomes return, unexpected ones throw.
+- **`0 | 1` as a type.** `exitCode: 0 | 1` — a numeric literal union. The compiler rejects
+  `exitCode: 2`; the type IS the exit-code contract with git.
+- **Template-literal constant with interpolation** (`HOOK_SCRIPT` embedding `HOOK_MARKER`) — one
+  source of truth for the marker, used by both writer and detector.
+
+### Concepts
+- **Fail-open vs fail-closed is a POLICY, chosen per layer.** The hook fails OPEN (broken meshlock
+  must not brick commits — an uninstalled gate protects nobody); a security gate would fail CLOSED.
+  Neither is "correct" in general; what matters is choosing deliberately and reserving the blocking
+  signal (exit 1) for the positive verdict only. Two belts: the runtime catches its own internals,
+  the CLI catches deps-assembly failures BEFORE the runtime exists.
+- **NUL-delimited output (`-z`).** Filenames can contain newlines; git quotes them in line mode; NUL
+  is the one byte a path cannot contain. Rule: when consuming tool output programmatically, prefer
+  the machine format over parsing the human one.
+- **Ownership markers.** The installer may only overwrite what carries its own marker — the
+  refuse-to-clobber discipline (M3.3b's config rule) generalized: never destroy state you didn't
+  create and can't parse. Versioned marker = future migration hook.
+- **Canonicalize both sides or you haven't canonicalized.** The hook realpaths its side; locks store
+  agent paths raw — so the comparison is still unsound (the residual ISSUE). Normalization must
+  happen where data ENTERS the system (M6.1), not just where it's compared.
+- **`writeFileSync` mode only applies on CREATE** — the unconditional `chmodSync` after an upgrade
+  overwrite is load-bearing, not paranoia.
+- **PATH-relative over pinned paths** (shim `exec meshlock`) — the M3.3b lesson again: pinned
+  interpreter paths die on environment upgrades and fail SILENTLY; PATH failures are rare and loud.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->

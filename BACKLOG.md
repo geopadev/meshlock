@@ -75,6 +75,8 @@ smoke test). Make a conscious bump decision post-M4 — check the v5 changelog f
 - Git worktree isolation (L6 enforcement layer) — Phase 2. M5.1c note: a multi-branch release diffs
   every branch's baseline against the SAME current file content — correct for one working tree, wrong
   if worktrees let branches genuinely diverge on disk. Resolve together.
+  M5.2 note: install-hook refuses a `.git` FILE (worktree/submodule pointer) with a generic
+  "not a git repository" — misleading; name the limitation in the message when worktrees land.
 - Mobile app
 
 ## M2.5 — Branch-aware locking (now in implementation plan)

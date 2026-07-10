@@ -460,7 +460,42 @@ fix)** → M5.2 = shell shim + installer + CLI.
   path deliberately untouched (≤1 candidate ⇒ post-fetch equivalent; belt kept both paths). 128 tests
   (was 121, +7); all three pins green (expired-owned records; expired+live-sibling held/guarded;
   multi-branch per-branch records).
-- 📋 **M5.2 [architect-invented] — NEXT:** shell shim + installer + CLI wiring (closes M5).
+- ✅ **M5.2 [architect-invented]** (Fable 5): `hooks/run.ts` — runPreCommit({db,cwd,sessionId}) →
+  {exitCode, message}; staged via `git diff --cached --name-only -z`, NUL-parsed (never line-split);
+  the SEAM: realpath'd repoRoot + join + realpathSync per path, staged-deletion ENOENT → plain-join
+  fallback; blocked → exit 1 listing every conflict (rel path, holder-8, branch, expiry) + hint;
+  FAIL-OPEN at two belts (runtime catch + CLI deps-assembly catch): any internal error → exit 0 +
+  warning; exit 1 reserved for a positive verdict. `hooks/install.ts` — marker-gated (`# meshlock-hook
+  v1`) shim, PATH-relative `meshlock` (M3.3b lesson), chmod 0755 unconditional (writeFileSync mode
+  only applies on create), foreign hook → refuse byte-intact, own marker → idempotent upgrade.
+  CLI: install-hook + hook pre-commit. 141 tests (was 128, +13). E2E: install → clean pass → foreign
+  lock blocks exit 1 → release → pass; foreign-hook refusal intact. **M5 (pre-commit hook) COMPLETE
+  — MeshLock warns (M4) and enforces (M5).**
+
+**Follow-ons spawned by M5.2 (NOT done here):**
+- **[M6.1 — SCHEDULED]** Unnormalized lock paths: locks store agent-supplied paths as-is; the hook
+  canonicalizes only its side, so a lock acquired under a symlinked/`..`/case-variant path evades the
+  gate — silent under-enforcement. Fix = canonicalization at the MCP tool boundary (acquire/check/
+  release), shared helper; hook adopts the same helper next.
+- **[M6.2 — DO IT]** Ephemeral default session identity: loadConfig() without a config file returns a
+  fresh random session_id and never persists → a hook run in that state mismatches the committer's
+  OWN locks (self-block). Decision: persist the default config on first load.
+- **[minor]** `core.hooksPath` override silently redirects git away from .git/hooks → install-hook
+  becomes a no-op. Detect at install time (`git config core.hooksPath`) and refuse loudly.
+- **[note]** The 5s git-fact cache is inert in the one-shot hook process; only matters if runtime and
+  daemon ever share a process (stale branch within 5s of a checkout).
+
+---
+
+## M6 — CLI commands + run wrapper  🔨
+**Plan says:** `meshlock init / status / unlock <file> / upgrade` + `cli/wrapper.ts` (`mesh run
+claude "..."`: pre-check locks, spawn agent child w/ inherited stdio, post-scan `git diff HEAD`,
+flag unlocked modifications, propose commit message). Sonnet 4.6 per v6.
+
+**Split [architect-invented]:** M6.1 = path canonicalization at the MCP tool boundary (the M5.2
+under-enforcement fix — gate integrity first) → M6.2 = status + unlock commands + persist-default-
+config fix (`upgrade` scope call here) → M6.3 = run wrapper.
+- 📋 **M6.1 — NEXT** · 📋 **M6.2** · 📋 **M6.3**
 
 **Follow-ons spawned by M5.1c (NOT done here):**
 - **[trap, note]** releaseLock now opens its own transaction — a future caller inside an outer
@@ -487,8 +522,7 @@ fix)** → M5.2 = shell shim + installer + CLI.
 
 ---
 
-## M6–M10 — not yet reached
-- 📋 **M6** CLI + run wrapper
+## M7–M10 — not yet reached
 - 📋 **M7** Web dashboard (buffer milestone — can ship minimal if schedule tight)
 - 📋 **M8** Relay client + free self-host relay (+ team change-briefing sync)
 - 📋 **M9** VSCode extension (five-state colour system — depends on M2.5 branch + M3.5 briefing)
@@ -498,13 +532,15 @@ fix)** → M5.2 = shell shim + installer + CLI.
 
 ## Current position
 
-**Active milestone:** 🔨 **M5 (pre-commit hook) IN PROGRESS** — M5.1 + M5.1b + M5.1c ✅ DONE, 128
-tests. Decision logic deterministic, release recording causal (deleted rows carry their own baselines),
-omitted-checkLock live-only. → 📋 **M5.2 next** (shell shim + installer + CLI — closes M5; the
-realpath path-conversion seam is the named risk). Fable-5 sprint; teaching → TEACHING-BLOCK.md.
+**Active milestone:** ✅ **M5 (pre-commit hook) COMPLETE** — decision logic (M5.1), deterministic
+lookup (M5.1b), causal release recording (M5.1c), shim + installer + fail-open runtime (M5.2). 141
+tests. MeshLock now WARNS (M4 daemon) and ENFORCES (M5 hook). → 🔨 **M6 in progress**: M6.1 next
+(tool-boundary path canonicalization — closes the M5.2 under-enforcement hole), then M6.2 (status/
+unlock + config persistence), M6.3 (run wrapper). **After M6: install-ready — the Show HN trigger.**
+Fable-5 sprint; teaching → TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, **M5.1c**. 128 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, **M5.2**. 141 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 
