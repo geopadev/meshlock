@@ -7,6 +7,7 @@ import { getRepoRoot } from "../core/git.js";
 import { startDaemon } from "../daemon/index.js";
 import { installHook } from "../hooks/install.js";
 import { runPreCommit } from "../hooks/run.js";
+import { formatStatus } from "./status.js";
 import {
   getClaudeConfigPath,
   registerMeshlock,
@@ -20,6 +21,7 @@ function usage(): string {
     "Commands:",
     "  init              Register the meshlock MCP server in Claude Code's user config",
     "  serve             Start the MCP server over stdio (how Claude Code launches it)",
+    "  status            Show the current repo's active locks",
     "  watch             Watch the current repo and warn about edits to unlocked paths",
     "  install-hook      Install the pre-commit lock gate into this repo's .git/hooks",
     "  hook pre-commit   Run the pre-commit gate (invoked by the installed hook)",
@@ -136,11 +138,30 @@ async function runHookPreCommit(): Promise<void> {
   }
 }
 
+/**
+ * One-shot read: render the repo's live locks to STDOUT — the status IS the
+ * command's product, not a diagnostic (unlike watch's stderr warnings). Config
+ * supplies the session identity so the user's own rows carry the (you) marker.
+ */
+async function runStatus(): Promise<void> {
+  const config = await loadConfig();
+  const db = openDatabase(getDatabasePath());
+  try {
+    const repoRoot = await getRepoRoot(process.cwd());
+    console.log(formatStatus(db, repoRoot, config.session_id));
+  } finally {
+    db.close();
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
     case "init":
       await runInit();
+      return;
+    case "status":
+      await runStatus();
       return;
     case "watch":
       await runWatch();

@@ -1,5 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
+import {
+  chmod,
+  lstat,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+  mkdir,
+} from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -54,6 +65,51 @@ describe("config", () => {
 
     const second = await loadConfig();
     expect(second.session_id).toBe(first.session_id);
+  });
+
+  it("saveConfig leaves no .tmp sibling behind after a successful write (M6.2b)", async () => {
+    await saveConfig(defaultConfig());
+
+    const dir = join(tempHome, ".meshlock");
+    const entries = await readdir(dir);
+    expect(entries).toEqual(["config.json"]);
+  });
+
+  it("preserves a user-tightened file mode across saves (M6.2b)", async () => {
+    await saveConfig(defaultConfig());
+    await chmod(getConfigPath(), 0o600);
+
+    await saveConfig(defaultConfig());
+
+    // rename would otherwise install the tmp's fresh umask mode (644).
+    const mode = (await stat(getConfigPath())).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it("writes THROUGH a symlinked config.json instead of replacing the link (M6.2b)", async () => {
+    const dir = join(tempHome, ".meshlock");
+    await mkdir(dir, { recursive: true });
+    const realFile = join(dir, "real-config.json");
+    await writeFile(realFile, JSON.stringify(defaultConfig()), "utf-8");
+    await symlink(realFile, join(dir, "config.json"));
+
+    const saved = defaultConfig();
+    await saveConfig(saved);
+
+    // The link survives, and the new content landed in its TARGET.
+    expect((await lstat(join(dir, "config.json"))).isSymbolicLink()).toBe(true);
+    const target = JSON.parse(await readFile(realFile, "utf-8")) as {
+      session_id: string;
+    };
+    expect(target.session_id).toBe(saved.session_id);
+  });
+
+  it("a corrupt-JSON load error names the config path (M6.2b)", async () => {
+    const dir = join(tempHome, ".meshlock");
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "config.json"), "{ truncated", "utf-8");
+
+    await expect(loadConfig()).rejects.toThrow(getConfigPath());
   });
 
   it("a corrupt config file still throws and is NEVER overwritten (M6.2)", async () => {
