@@ -63,6 +63,11 @@ nested repos (submodules) misattributes the nested repo's events to the outer ro
 acceptable for v1 — one daemon = one repo. Revisit only if a real submodule user appears; the fix
 shape would be per-event root resolution (cached) or one daemon per nested root.
 
+## Case-insensitive filesystems (noted at M6.1)
+canonicalizePath dereferences symlinks but does not fold case — on macOS/Windows two casings of one
+file remain distinct lock identities (evasion sliver + duplicate-lock risk). Parked with portability;
+resolve if/when non-Linux support becomes a target.
+
 ## chokidar v5 bump (noted at M4.1)
 chokidar 5.0.0 exists on the registry; M4.1 pinned `^4.0.3` deliberately (spec-driven, API verified by
 smoke test). Make a conscious bump decision post-M4 — check the v5 changelog for `ignored`-function /

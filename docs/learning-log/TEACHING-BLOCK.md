@@ -335,4 +335,32 @@ of this once Fable access ends.
 
 ---
 
+## M6.1 — path canonicalization (`core/paths.ts`)
+
+### TS syntax
+- **Destructure-rename at the boundary:** `({ path: rawPath }) => { const path = canonicalizePath(rawPath) }`
+  — the raw input gets a name that marks it untrusted, and the familiar name `path` is REBOUND to the
+  sanitized form, so all downstream code (unchanged) uses the safe value. A naming convention doing
+  security work.
+- **Nested try/catch as a tier ladder** — three fallbacks, each catch delegating one level down;
+  never-throws as an API guarantee (documented), matching getRepoRoot's sentinel contract.
+
+### Concepts
+- **Identity is the stored string.** Lock identity = (repo_root, path, branch) as STRINGS; the
+  filesystem's many names for one file (symlinks, `..`, case) all collapse or don't at ingestion.
+  If they don't, every comparison site inherits the ambiguity.
+- **Normalize where data ENTERS, not where it's compared.** There are many comparison sites (engine,
+  hook, daemon, briefing) and one ingestion point per tool — fix the funnel, not the fan-out. Same
+  shape as validation-at-the-boundary (zod on config).
+- **Canonicalizing a file that doesn't exist yet:** the variance lives in the DIRECTORIES, so
+  realpath(parent)+basename fixes the alias even pre-creation. Tier design = ask "which part of this
+  path has fs reality?"
+- **Test hygiene: canonicalize your EXPECTATIONS too.** The OS tmp dir itself may be a symlink
+  (macOS /tmp → /private/tmp) — expected values must be realpath'd or the test fails on some machines
+  for reasons unrelated to the code.
+- **No migration as a reasoned choice:** TTL-short rows age out; a migration would be complexity for
+  data that expires on its own. "Do nothing" is a valid option when data has a half-life.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->

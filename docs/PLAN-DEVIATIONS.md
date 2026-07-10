@@ -495,7 +495,25 @@ flag unlocked modifications, propose commit message). Sonnet 4.6 per v6.
 **Split [architect-invented]:** M6.1 = path canonicalization at the MCP tool boundary (the M5.2
 under-enforcement fix — gate integrity first) → M6.2 = status + unlock commands + persist-default-
 config fix (`upgrade` scope call here) → M6.3 = run wrapper.
-- 📋 **M6.1 — NEXT** · 📋 **M6.2** · 📋 **M6.3**
+**We did:**
+- ✅ **M6.1 [architect-invented]** (Fable 5): `core/paths.ts` — `canonicalizePath`, three never-throw
+  tiers: existing → realpathSync; missing file → realpath(parent)+basename (kills symlinked-prefix
+  variance pre-creation); parent missing → lexical resolve() (sentinel spirit). Applied first-line in
+  acquire/check/release handlers (before the dirname()-based branch/repo resolvers, which now see the
+  canonical form); team_status untouched (no path input). Evasion pin closed: alias-acquired lock is
+  stored canonical and found by a canonical hook-style lookup. No migration (TTL-short rows age out).
+  145 tests (was 141, +4).
+- 📋 **M6.2** (status + unlock + config persistence + hook adopts canonicalizePath) · 📋 **M6.3**
+  (run wrapper)
+
+**Follow-ons spawned by M6.1 (NOT done here):**
+- **[M6.2 — SCHEDULED]** `hooks/run.ts` still builds absolute paths without the shared helper —
+  adopt `canonicalizePath` so hook lookups match tool-stored rows byte-for-byte.
+- **[OPEN — consult]** Tier-3 fallback is lexical: a symlink above a MISSING multi-level suffix
+  (alias/newdir/newfile.ts, newdir absent) survives canonicalization — a sliver of the hole stays
+  open for deep-locking-before-mkdir. Walk-up variant (realpath deepest existing ancestor, re-join
+  the rest) closes it; ~10 lines.
+- **[note]** One realpathSync per tool call — negligible at agent rates.
 
 **Follow-ons spawned by M5.1c (NOT done here):**
 - **[trap, note]** releaseLock now opens its own transaction — a future caller inside an outer
@@ -532,15 +550,14 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
 
 ## Current position
 
-**Active milestone:** ✅ **M5 (pre-commit hook) COMPLETE** — decision logic (M5.1), deterministic
-lookup (M5.1b), causal release recording (M5.1c), shim + installer + fail-open runtime (M5.2). 141
-tests. MeshLock now WARNS (M4 daemon) and ENFORCES (M5 hook). → 🔨 **M6 in progress**: M6.1 next
-(tool-boundary path canonicalization — closes the M5.2 under-enforcement hole), then M6.2 (status/
-unlock + config persistence), M6.3 (run wrapper). **After M6: install-ready — the Show HN trigger.**
-Fable-5 sprint; teaching → TEACHING-BLOCK.md.
+**Active milestone:** 🔨 **M6 (CLI + wrapper) IN PROGRESS** — M6.1 (tool-boundary path
+canonicalization) ✅ DONE, 145 tests; the M5.2 evasion hole is closed (tier-3 sliver logged, open
+decision). → 📋 **M6.2 next** (status/unlock commands, config persistence, hook adopts the helper),
+then M6.3 (run wrapper). **After M6: install-ready — the Show HN trigger.** Fable-5 sprint;
+teaching → TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, **M5.2**. 141 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, M5.2, **M6.1**. 145 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 
