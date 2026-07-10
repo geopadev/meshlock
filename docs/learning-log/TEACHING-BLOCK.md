@@ -363,4 +363,32 @@ of this once Fable access ends.
 
 ---
 
+## M6.2 — fixes bundle (`paths.ts` walk-up · `config.ts` persistence · hook helper)
+
+### TS syntax
+- **`(err as NodeJS.ErrnoException).code === "ENOENT"`** — Node errors arrive as `unknown`/`Error`;
+  the ErrnoException cast exposes the errno `code`. Discriminating on the CODE (not message text) is
+  how you tell "file absent" from "file unreadable" — two failures, opposite correct responses.
+- **`for (;;)` with returns as exits** — the walk-up loop's only exits are `return` statements;
+  termination argued in the comment (dirname strictly shortens; root realpaths). When a loop's bound
+  isn't a counter, write the termination argument down.
+
+### Concepts
+- **Absent ≠ corrupt ≠ unreadable.** Absent (ENOENT) = nothing to lose → create. Corrupt-but-readable
+  = user data → throw, never write. Unreadable (EACCES) = probably user data → don't write either.
+  One file, three failure modes, three behaviours — keyed on the errno, not on "did it throw".
+- **Best-effort side writes.** The first-load save is wrapped: a read-only home must not turn a
+  previously-working case into a crash. Rule: a NEW convenience write must never make an OLD path
+  fail.
+- **Subsumption proofs.** Fix 3 deleted special-case code and predicted "zero test changes" — the
+  old tests passing unmodified IS the proof the general mechanism covers the special case. Design
+  reviews can demand this in advance.
+- **Walk-up generalizes the parent trick:** "which part of this path has fs reality?" answered by
+  search, not by assuming exactly one missing level.
+- **New automation resurfaces old flaws:** non-atomic saveConfig was always non-atomic, but running
+  it UNATTENDED on every fresh install turns a latent wart into a wedge path. Automating a call site
+  changes the risk profile of everything beneath it.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->

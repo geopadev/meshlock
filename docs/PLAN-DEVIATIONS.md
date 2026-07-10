@@ -503,10 +503,32 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
   canonical form); team_status untouched (no path input). Evasion pin closed: alias-acquired lock is
   stored canonical and found by a canonical hook-style lookup. No migration (TTL-short rows age out).
   145 tests (was 141, +4).
-- 📋 **M6.2 — NEXT** fixes bundle [ratified 2026-07-10]: tier-3 walk-up (closes the sliver),
-  persist-default-config-on-first-load (option a — self-healing identity), hook adopts
-  canonicalizePath. · 📋 **M6.2b** status + unlock commands (`upgrade` → BACKLOG, ratified) ·
-  📋 **M6.3** run wrapper
+- ✅ **M6.2 [architect-invented]** (Fable 5): fixes bundle [ratified]. (1) Walk-up canonicalization —
+  dirname() to the deepest EXISTING ancestor, realpath it, re-join the missing remainder; terminates
+  at the root; lexical resolve() only as pathological catch; M6.1 sliver pinned closed. (2) Config
+  persistence — ENOENT (and ONLY ENOENT — an unreadable-EACCES existing file is still never written,
+  stricter than spec, accepted) → saveConfig(default), best-effort (write failure → in-memory
+  default, no crash); identity stable from first contact, hook self-block ended; corrupt file still
+  throws byte-intact. (3) Hook toLockPath = canonicalizePath(join(repoRoot, staged)) — deletion
+  fallback subsumed by the walk-up; run.test.ts needed ZERO changes (the predicted subsumption
+  proof). 148 tests (was 145, +3).
+- 📋 **M6.2b — NEXT** status + unlock commands (`upgrade` → BACKLOG, ratified) · 📋 **M6.3** run
+  wrapper
+
+**Follow-ons spawned by M6.2 (NOT done here):**
+- **[OPEN — consult]** saveConfig is a non-atomic writeFile, and it now runs UNATTENDED on first
+  load: a process killed mid-write leaves truncated JSON that bricks every future loadConfig until
+  hand-deleted — the one wedge path this change added. Fix: tmp-file + rename (~5 lines). Related
+  chore: corrupt-JSON failures surface as a raw SyntaxError naming no file path — one-line wrap
+  makes the wedge diagnosable.
+- **[note, pre-existing]** resolve() can throw when the process cwd was deleted (uv_cwd) — relative
+  inputs only, pathological, unchanged by M6.2.
+- **[note, verified]** A staged deletion whose parent dir was symlink-swapped DURING the lock's
+  lifetime misses where the old code coincidentally blocked; the new behaviour is the consistent one
+  (tool-side check on the same fs state computes the same string). Inherent to fs mutation between
+  acquire and check.
+- **[chore, pre-existing]** config.test.ts carries an inert vi.resetModules() and an unused homedir
+  import.
 
 **Follow-ons spawned by M6.1 (NOT done here):**
 - **[M6.2 — SCHEDULED]** `hooks/run.ts` still builds absolute paths without the shared helper —
@@ -552,14 +574,14 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
 
 ## Current position
 
-**Active milestone:** 🔨 **M6 (CLI + wrapper) IN PROGRESS** — M6.1 (tool-boundary path
-canonicalization) ✅ DONE, 145 tests; the M5.2 evasion hole is closed (tier-3 sliver logged, open
-decision). → 📋 **M6.2 next** (status/unlock commands, config persistence, hook adopts the helper),
-then M6.3 (run wrapper). **After M6: install-ready — the Show HN trigger.** Fable-5 sprint;
-teaching → TEACHING-BLOCK.md.
+**Active milestone:** 🔨 **M6 (CLI + wrapper) IN PROGRESS** — M6.1 + M6.2 ✅ DONE, 148 tests.
+Canonicalization complete both sides (sliver closed), identity self-healing, hook↔tool paths match
+by construction. → 📋 **M6.2b next** (status + unlock commands — consult open on unlock semantics +
+status format), then M6.3 (run wrapper). **After M6: install-ready — the Show HN trigger.**
+Fable-5 sprint; teaching → TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, M5.2, **M6.1**. 145 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, M5.2, M6.1, **M6.2**. 148 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 
