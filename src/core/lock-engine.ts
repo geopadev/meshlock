@@ -267,6 +267,41 @@ export function releaseLock(db: MeshLockDatabase, input: ReleaseInput): Lock[] {
 }
 
 /**
+ * Release EVERY session's locks on `path` in `repoRoot` — {@link releaseLock}
+ * WITHOUT the ownership filter. This is the HUMAN override primitive (CLI
+ * `unlock --force`): a person deliberately breaking another session's claim.
+ * Agents keep the ownership-scoped releaseLock; nothing in the MCP surface
+ * calls this.
+ *
+ * Same SELECT-then-DELETE causality as releaseLock, in one BEGIN IMMEDIATE
+ * transaction: the returned rows are exactly what was deleted — live AND
+ * expired alike (a human sweeping a path clean wants the stale rows gone
+ * too). `[]` means there was nothing to remove. Branch-ordered for stable
+ * output (SQLite ASC: NULL first).
+ */
+export function forceReleaseLock(
+  db: MeshLockDatabase,
+  repoRoot: string,
+  path: string
+): Lock[] {
+  const select = db.prepare<[string, string], Lock>(
+    `SELECT repo_root, path, session_id, mode, acquired_at, expires_at, branch, content_snapshot FROM locks
+     WHERE repo_root = ? AND path = ?
+     ORDER BY branch`
+  );
+  const del = db.prepare("DELETE FROM locks WHERE repo_root = ? AND path = ?");
+
+  const txn = db.transaction((): Lock[] => {
+    const rows = select.all(repoRoot, path);
+    if (rows.length > 0) {
+      del.run(repoRoot, path);
+    }
+    return rows;
+  });
+  return txn.immediate();
+}
+
+/**
  * Report the current holder of `path` within `repoRoot`. A lock whose
  * expires_at <= now counts as free.
  *

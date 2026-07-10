@@ -8,6 +8,7 @@ import { startDaemon } from "../daemon/index.js";
 import { installHook } from "../hooks/install.js";
 import { runPreCommit } from "../hooks/run.js";
 import { formatStatus } from "./status.js";
+import { unlockPath } from "./unlock.js";
 import {
   getClaudeConfigPath,
   registerMeshlock,
@@ -22,6 +23,9 @@ function usage(): string {
     "  init              Register the meshlock MCP server in Claude Code's user config",
     "  serve             Start the MCP server over stdio (how Claude Code launches it)",
     "  status            Show the current repo's active locks",
+    "  unlock <file> [--force]",
+    "                    Release your own lock on a file; --force removes ANY",
+    "                    session's locks (no change briefing is recorded)",
     "  watch             Watch the current repo and warn about edits to unlocked paths",
     "  install-hook      Install the pre-commit lock gate into this repo's .git/hooks",
     "  hook pre-commit   Run the pre-commit gate (invoked by the installed hook)",
@@ -154,6 +158,52 @@ async function runStatus(): Promise<void> {
   }
 }
 
+/**
+ * STRICT argument parsing — the CLI's first flag, so start the discipline:
+ * argv after `unlock` must be exactly `<file>` plus at most one `--force`, in
+ * either order. Anything else refuses with exit 1 naming the offender. A
+ * typo'd flag silently treated as a filename (or a second path silently
+ * ignored) would be a destructive command guessing at intent.
+ */
+async function runUnlock(args: string[]): Promise<void> {
+  const rest = args.filter((a) => a !== "--force");
+  const forceCount = args.length - rest.length;
+  const unknownFlag = rest.find((a) => a.startsWith("-"));
+  if (unknownFlag !== undefined) {
+    console.error(`unlock: unknown flag ${unknownFlag}\n\n${usage()}`);
+    process.exit(1);
+  }
+  if (forceCount > 1) {
+    console.error(`unlock: --force given more than once\n\n${usage()}`);
+    process.exit(1);
+  }
+  if (rest.length === 0) {
+    console.error(`unlock: missing <file> argument\n\n${usage()}`);
+    process.exit(1);
+  }
+  if (rest.length > 1) {
+    console.error(`unlock: unexpected argument ${rest[1]!}\n\n${usage()}`);
+    process.exit(1);
+  }
+
+  const config = await loadConfig();
+  const db = openDatabase(getDatabasePath());
+  try {
+    const result = await unlockPath({
+      db,
+      config,
+      rawPath: rest[0]!,
+      force: forceCount === 1,
+    });
+    // The message is the product → stdout; exitCode set without process.exit
+    // so the finally still closes the DB.
+    console.log(result.message);
+    process.exitCode = result.exitCode;
+  } finally {
+    db.close();
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
@@ -162,6 +212,9 @@ async function main(): Promise<void> {
       return;
     case "status":
       await runStatus();
+      return;
+    case "unlock":
+      await runUnlock(process.argv.slice(3));
       return;
     case "watch":
       await runWatch();

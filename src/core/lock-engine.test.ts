@@ -7,6 +7,7 @@ import {
   acquireLock,
   releaseLock,
   checkLock,
+  forceReleaseLock,
   listLocks,
   expireStaleLocks,
 } from "./lock-engine.js";
@@ -779,5 +780,102 @@ describe("concurrency — two connections to the same DB file", () => {
       connA.close();
       connB.close();
     }
+  });
+});
+
+describe("forceReleaseLock (M6.2c)", () => {
+  const path = "/repo/forced.ts";
+
+  it("deletes ALL sessions' rows on the path across branches, returned branch-ordered", () => {
+    // Three claims on one path: two sessions, three branches (incl. branchless).
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+      crossBranchMode: "ignore",
+    });
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "feature",
+      crossBranchMode: "ignore",
+    });
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: null,
+      crossBranchMode: "ignore",
+    });
+
+    const deleted = forceReleaseLock(db, REPO_A, path);
+
+    // No ownership filter: every session's row went. SQLite ASC: NULL first.
+    expect(deleted.map((l) => l.branch)).toEqual([null, "feature", "main"]);
+    expect(rowCount(db, path)).toBe(0);
+  });
+
+  it("leaves other paths and other repos untouched (S1)", () => {
+    const samePathOtherRepo = path;
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+    });
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path: "/repo/bystander.ts",
+      sessionId: SESSION_A,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+    });
+    acquireLock(db, {
+      repoRoot: REPO_B,
+      path: samePathOtherRepo,
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+    });
+
+    const deleted = forceReleaseLock(db, REPO_A, path);
+
+    expect(deleted).toHaveLength(1);
+    // The bystander path and the same path string in REPO_B both survive.
+    expect(rowCount(db, "/repo/bystander.ts")).toBe(1);
+    expect(checkLock(db, REPO_B, samePathOtherRepo).held).toBe(true);
+  });
+
+  it("returns [] when the path has no locks", () => {
+    expect(forceReleaseLock(db, REPO_A, "/repo/nothing-here.ts")).toEqual([]);
+  });
+
+  it("returns and deletes EXPIRED rows too (sweeping the path clean)", () => {
+    seedLock(db, path, SESSION_A, "2000-01-01T00:30:00.000Z"); // long expired
+    acquireLock(db, {
+      repoRoot: REPO_A,
+      path,
+      sessionId: SESSION_B,
+      mode: "exclusive",
+      timeoutSeconds: 1800,
+      branch: "main",
+      crossBranchMode: "ignore",
+    });
+
+    const deleted = forceReleaseLock(db, REPO_A, path);
+
+    expect(deleted).toHaveLength(2);
+    const sessions = deleted.map((l) => l.session_id).sort();
+    expect(sessions).toEqual([SESSION_A, SESSION_B]);
+    expect(rowCount(db, path)).toBe(0);
   });
 });
