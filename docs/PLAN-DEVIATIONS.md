@@ -512,8 +512,12 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
   throws byte-intact. (3) Hook toLockPath = canonicalizePath(join(repoRoot, staged)) — deletion
   fallback subsumed by the walk-up; run.test.ts needed ZERO changes (the predicted subsumption
   proof). 148 tests (was 145, +3).
-- 📋 **M6.2b — NEXT** status + unlock commands (`upgrade` → BACKLOG, ratified) · 📋 **M6.3** run
-  wrapper
+- 📋 **M6.2b — NEXT** [ratified 2026-07-10]: atomic saveConfig (tmp+rename) + JSON-error names the
+  file + `meshlock status` (human table only; --json stays with the BACKLOG structured-output item).
+  · 📋 **M6.2c**: `meshlock unlock <file>` — own-session by default (reuses the release handler, so
+  briefings still record), `--force` deletes ANY lock via a new engine forceReleaseLock (NO briefing
+  recorded — we don't own a foreign baseline; consequence flagged and accepted). · 📋 **M6.3** run
+  wrapper. (`upgrade` → BACKLOG, ratified.)
 
 **Follow-ons spawned by M6.2 (NOT done here):**
 - **[OPEN — consult]** saveConfig is a non-atomic writeFile, and it now runs UNATTENDED on first
