@@ -7,6 +7,7 @@ import type { Config } from "../../core/config.js";
 import { acquireLock } from "../../core/lock-engine.js";
 import { getCurrentBranch, getRepoRoot } from "../../core/git.js";
 import { getChanges, type ChangeRecord } from "../../core/changes.js";
+import { canonicalizePath } from "../../core/paths.js";
 
 /**
  * Read the file at `path` as the acquire-time baseline snapshot (M3.5b). This is
@@ -91,7 +92,11 @@ export const acquireLockToolConfig = {
  * "reconciling with M3.2c" note.
  */
 export function makeAcquireLockHandler(db: MeshLockDatabase, config: Config) {
-  return async ({ path }: { path: string }): Promise<CallToolResult> => {
+  return async ({ path: rawPath }: { path: string }): Promise<CallToolResult> => {
+    // Canonicalize at the boundary (M6.1): everything downstream — branch and
+    // repo resolution, the engine lookup, the briefing query — sees the
+    // symlink-free form, so an aliased path can't evade the hook or the daemon.
+    const path = canonicalizePath(rawPath);
     const branch = await getCurrentBranch(dirname(path));
     const repoRoot = await getRepoRoot(dirname(path));
     // Capture the baseline now, before the engine call. The engine ignores this

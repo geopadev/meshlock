@@ -8,6 +8,7 @@ import { releaseLock } from "../../core/lock-engine.js";
 import { getRepoRoot } from "../../core/git.js";
 import { diffContent } from "../../core/diff.js";
 import { recordChange } from "../../core/changes.js";
+import { canonicalizePath } from "../../core/paths.js";
 
 /**
  * Input shape for `release_lock`. `path` is required; `summary` is optional
@@ -68,12 +69,15 @@ function looksBinary(content: string): boolean {
  */
 export function makeReleaseLockHandler(db: MeshLockDatabase, config: Config) {
   return async ({
-    path,
+    path: rawPath,
     summary,
   }: {
     path: string;
     summary?: string;
   }): Promise<CallToolResult> => {
+    // Canonicalize at the boundary (M6.1) — a release must find the same row
+    // the (canonicalized) acquire wrote, whatever alias the agent used today.
+    const path = canonicalizePath(rawPath);
     const repoRoot = await getRepoRoot(dirname(path));
 
     // The engine hands back the row(s) it deleted (M5.1c), each with its branch

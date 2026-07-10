@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openDatabase, type MeshLockDatabase } from "../../core/db.js";
-import { acquireLock, type CrossBranchMode } from "../../core/lock-engine.js";
+import { acquireLock, checkLock, type CrossBranchMode } from "../../core/lock-engine.js";
 import { recordChange } from "../../core/changes.js";
 import type { Config } from "../../core/config.js";
 import { clearBranchCache, getRepoRoot } from "../../core/git.js";
@@ -229,5 +229,31 @@ describe("acquire_lock handler — briefing (M3.5c)", () => {
 
     expect(text).toContain("Acquired");
     expect(text).not.toContain("Recent changes");
+  });
+});
+
+describe("acquire_lock handler — path canonicalization (M6.1)", () => {
+  it("stores the canonical path for a symlink-aliased acquire so canonical lookups find it", async () => {
+    // The M5.2 evasion case, pinned closed: acquire through an ALIAS, then look
+    // up the way the hook/daemon do — under the CANONICAL path — and find it.
+    await mkdir(join(tempDir, "real"));
+    await symlink(join(tempDir, "real"), join(tempDir, "alias"));
+    const realDir = await realpath(join(tempDir, "real"));
+    const canonicalPath = join(realDir, "target.ts");
+    await writeFile(canonicalPath, "export const t = 1;\n");
+
+    const handler = makeAcquireLockHandler(db, makeConfig());
+    const text = firstText(await handler({ path: join(tempDir, "alias", "target.ts") }));
+    expect(text).toContain("Acquired");
+
+    // The stored row carries the canonical string, not the alias.
+    const stored = db.prepare("SELECT path FROM locks").all() as { path: string }[];
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.path).toBe(canonicalPath);
+
+    // A hook-style lookup under the canonical path finds the lock — resolving
+    // repoRoot the same way the handler did (from the file's real directory).
+    const lookupRepo = await getRepoRoot(realDir);
+    expect(checkLock(db, lookupRepo, canonicalPath).held).toBe(true);
   });
 });

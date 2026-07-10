@@ -4,6 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import type { MeshLockDatabase } from "../../core/db.js";
 import { checkLock } from "../../core/lock-engine.js";
 import { getRepoRoot } from "../../core/git.js";
+import { canonicalizePath } from "../../core/paths.js";
 
 /**
  * Input shape for `check_lock`, as a Zod raw shape. The SDK turns this into the
@@ -29,7 +30,9 @@ export const checkLockToolConfig = {
  * lock's repo (from the file's directory) before the lookup.
  */
 export function makeCheckLockHandler(db: MeshLockDatabase) {
-  return async ({ path }: { path: string }): Promise<CallToolResult> => {
+  return async ({ path: rawPath }: { path: string }): Promise<CallToolResult> => {
+    // Canonicalize at the boundary (M6.1) — see core/paths.ts.
+    const path = canonicalizePath(rawPath);
     const repoRoot = await getRepoRoot(dirname(path));
     const result = checkLock(db, repoRoot, path);
 
