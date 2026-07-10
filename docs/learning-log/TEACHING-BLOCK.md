@@ -391,4 +391,31 @@ of this once Fable access ends.
 
 ---
 
+## M6.2b — atomic config write + status (`config.ts`, `cli/status.ts`)
+
+### TS syntax
+- **`try { ... } finally { db.close() }`** in runStatus — the finally guarantees cleanup on both
+  paths; the CLI's version of the test-suite afterEach discipline.
+- **`out.match(/\(you\)/g)).toHaveLength(1)`** — asserting a marker appears EXACTLY once, not just
+  "somewhere": the difference between testing presence and testing correctness.
+
+### Concepts
+- **Atomicity via rename(2).** The target is only ever touched by rename, which atomically swaps a
+  directory entry — kill mid-tmp-write leaves the old file + litter; kill mid-rename leaves old or
+  new. Truncated JSON becomes impossible. Same-directory tmp is LOAD-BEARING: rename across a mount
+  degrades to copy+delete and the guarantee evaporates.
+- **An upgrade must inherit the old code's incidental behaviours.** Plain writeFile wrote THROUGH a
+  symlink and PRESERVED file mode; naive tmp+rename does neither (replaces the link, installs umask
+  mode). Two "extra" fixes were really the spec's hidden surface — when replacing a primitive,
+  enumerate what the old one did by accident that callers now rely on.
+- **Durability tiers:** atomicity (no partial states) ≠ durability (survives power loss, needs
+  fsync). Choosing atomic-but-not-durable is a reasoned tier for a dev-tool config — name the tier,
+  don't hand-wave "safe".
+- **stdout is the product; stderr is commentary.** status prints to stdout (pipeable output), watch
+  warns on stderr, serve owns stdout for JSON-RPC. One discipline, three commands.
+- **Edge found by asking "when is relative() empty?"** — a lock on the repo root itself. Formatting
+  code has domain edges too.
+
+---
+
 <!-- Fable-sprint milestones append below as they're reviewed. -->

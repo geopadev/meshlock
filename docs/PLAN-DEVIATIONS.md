@@ -512,12 +512,29 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
   throws byte-intact. (3) Hook toLockPath = canonicalizePath(join(repoRoot, staged)) — deletion
   fallback subsumed by the walk-up; run.test.ts needed ZERO changes (the predicted subsumption
   proof). 148 tests (was 145, +3).
-- 📋 **M6.2b — NEXT** [ratified 2026-07-10]: atomic saveConfig (tmp+rename) + JSON-error names the
-  file + `meshlock status` (human table only; --json stays with the BACKLOG structured-output item).
-  · 📋 **M6.2c**: `meshlock unlock <file>` — own-session by default (reuses the release handler, so
-  briefings still record), `--force` deletes ANY lock via a new engine forceReleaseLock (NO briefing
-  recorded — we don't own a foreign baseline; consequence flagged and accepted). · 📋 **M6.3** run
-  wrapper. (`upgrade` → BACKLOG, ratified.)
+- ✅ **M6.2b [architect-invented]** (Fable 5): atomic saveConfig — same-dir tmp (pid+hex) + rename(2);
+  kill leaves old-or-new, never truncated JSON; failed rename unlinks the orphan. TWO beyond-spec
+  fixes ACCEPTED as regression prevention vs old writeFile (verifier-driven, pinned): rename target
+  resolved through canonicalizePath so a symlinked config.json is written THROUGH not replaced; the
+  existing file mode mirrored onto the tmp so chmod 600 survives (rename would install umask 644).
+  loadConfig JSON.parse wrapped — corrupt now throws "Invalid JSON in config at <path>" (message
+  only; ENOENT/corrupt/EACCES semantics untouched, M6.2 pins green). `meshlock status`:
+  cli/status.ts formatStatus — repo-scoped listLocks, empty message, aligned table (rel path w/
+  absolute fallback for a repo-root lock, holder-8 + (you), branch or -, mode, remaining), stdout =
+  the product. 156 tests (was 148, +8). E2E incl. live MCP acquire. SIDE-FINDING: a serve started
+  pre-persistence holds an in-memory session ≠ the persisted one — one restart converges identities.
+- 📋 **M6.2c — NEXT** [ratified]: `meshlock unlock <file>` — own-session default reuses the release
+  handler (briefings record); `--force` deletes ANY lock via new engine forceReleaseLock (NO
+  briefing — foreign baseline isn't ours; flagged+accepted). Strict arg parsing (first CLI flag).
+  · 📋 **M6.3** run wrapper. (`upgrade` → BACKLOG, ratified.)
+
+**Follow-ons spawned by M6.2b (NOT done here):**
+- **[chore, minor]** Orphaned config tmp files from killed processes accumulate in ~/.meshlock
+  (~300B, cosmetic) — age-based sweep at load would tidy.
+- **[note]** fsync-grade durability deliberately omitted; revisit only if config ever holds
+  crash-critical data. Symlink re-point mid-save lands on the old target (rare, self-heals).
+- **[chore]** Commands silently ignore extra argv — strictness pass as the CLI grows flags (M6.2c
+  starts it for unlock).
 
 **Follow-ons spawned by M6.2 (NOT done here):**
 - **[OPEN — consult]** saveConfig is a non-atomic writeFile, and it now runs UNATTENDED on first
@@ -578,14 +595,13 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
 
 ## Current position
 
-**Active milestone:** 🔨 **M6 (CLI + wrapper) IN PROGRESS** — M6.1 + M6.2 ✅ DONE, 148 tests.
-Canonicalization complete both sides (sliver closed), identity self-healing, hook↔tool paths match
-by construction. → 📋 **M6.2b next** (status + unlock commands — consult open on unlock semantics +
-status format), then M6.3 (run wrapper). **After M6: install-ready — the Show HN trigger.**
+**Active milestone:** 🔨 **M6 (CLI + wrapper) IN PROGRESS** — M6.1, M6.2, M6.2b ✅ DONE, 156 tests.
+Config writes atomic, `meshlock status` live. → 📋 **M6.2c next** (unlock + --force, fully ratified),
+then M6.3 (run wrapper — the last M6 piece). **After M6: install-ready — the Show HN trigger.**
 Fable-5 sprint; teaching → TEACHING-BLOCK.md.
 
 **Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
-S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, M5.2, M6.1, **M6.2**. 148 tests.
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, M5.2, M6.1, M6.2, **M6.2b**. 156 tests.
 
 <!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
 
