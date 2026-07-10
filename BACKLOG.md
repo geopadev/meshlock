@@ -63,6 +63,11 @@ nested repos (submodules) misattributes the nested repo's events to the outer ro
 acceptable for v1 — one daemon = one repo. Revisit only if a real submodule user appears; the fix
 shape would be per-event root resolution (cached) or one daemon per nested root.
 
+## `meshlock upgrade` command — deferred from M6 (decided at M6.2 consult)
+v6 lists init/status/unlock/upgrade; upgrade (self-update) is packaging work coupled to npm
+distribution (files field, dist channel, version detection) that isn't settled. Build it with the
+npm-publish push near Show HN, not as an M6 CLI command. status/unlock are the operational core.
+
 ## Case-insensitive filesystems (noted at M6.1)
 canonicalizePath dereferences symlinks but does not fold case — on macOS/Windows two casings of one
 file remain distinct lock identities (evasion sliver + duplicate-lock risk). Parked with portability;

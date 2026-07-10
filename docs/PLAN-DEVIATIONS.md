@@ -503,8 +503,10 @@ config fix (`upgrade` scope call here) → M6.3 = run wrapper.
   canonical form); team_status untouched (no path input). Evasion pin closed: alias-acquired lock is
   stored canonical and found by a canonical hook-style lookup. No migration (TTL-short rows age out).
   145 tests (was 141, +4).
-- 📋 **M6.2** (status + unlock + config persistence + hook adopts canonicalizePath) · 📋 **M6.3**
-  (run wrapper)
+- 📋 **M6.2 — NEXT** fixes bundle [ratified 2026-07-10]: tier-3 walk-up (closes the sliver),
+  persist-default-config-on-first-load (option a — self-healing identity), hook adopts
+  canonicalizePath. · 📋 **M6.2b** status + unlock commands (`upgrade` → BACKLOG, ratified) ·
+  📋 **M6.3** run wrapper
 
 **Follow-ons spawned by M6.1 (NOT done here):**
 - **[M6.2 — SCHEDULED]** `hooks/run.ts` still builds absolute paths without the shared helper —
