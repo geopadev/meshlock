@@ -12,23 +12,38 @@ import { basename, dirname, join, resolve } from "node:path";
  * hole). Normalizing ONCE, where a path ENTERS MeshLock, means every consumer
  * downstream inherits correctness without knowing symlinks exist.
  *
- * Three tiers, never throws (the getRepoRoot sentinel spirit):
+ * Strategy, never throws (the getRepoRoot sentinel spirit):
  *  1. Path exists → realpathSync(path): the OS's own canonical answer.
- *  2. Path missing (locking a file about to be CREATED is legitimate — M3.5b)
- *     → canonicalize the PARENT and re-join the basename: the symlinked-prefix
- *     variance is in the directories, so this fixes the alias problem even
- *     before the file exists.
- *  3. Parent also missing → resolve(path): plain lexical absolutization, the
- *     best available answer for a path with no fs reality yet.
+ *  2. Path missing (locking a file about to be CREATED is legitimate — M3.5b,
+ *     and the missing suffix may be several levels deep, e.g. a new directory
+ *     plus a new file) → WALK UP via dirname() to the deepest EXISTING
+ *     ancestor, canonicalize that, and re-join the missing remainder. The
+ *     symlinked-prefix variance lives in the existing directories, so this
+ *     fixes the alias problem however deep the not-yet-created suffix is.
+ *     Terminates because dirname() strictly shortens toward the fs root,
+ *     which always realpaths.
+ *  3. If even the walk finds no realpath-able ancestor (pathological — e.g.
+ *     realpath failing for non-ENOENT reasons all the way up) → resolve(path):
+ *     plain lexical absolutization keeps the never-throws contract.
  */
 export function canonicalizePath(path: string): string {
   try {
     return realpathSync(path);
   } catch {
-    try {
-      return join(realpathSync(dirname(path)), basename(path));
-    } catch {
-      return resolve(path);
+    let ancestor = dirname(path);
+    let remainder = basename(path);
+    for (;;) {
+      try {
+        return join(realpathSync(ancestor), remainder);
+      } catch {
+        const parent = dirname(ancestor);
+        if (parent === ancestor) {
+          // Reached the fs root without one successful realpath.
+          return resolve(path);
+        }
+        remainder = join(basename(ancestor), remainder);
+        ancestor = parent;
+      }
     }
   }
 }

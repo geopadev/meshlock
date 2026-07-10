@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
 import { join, relative } from "node:path";
 import type { MeshLockDatabase } from "../core/db.js";
 import { getCurrentBranch, getRepoRoot } from "../core/git.js";
+import { canonicalizePath } from "../core/paths.js";
 import { checkCommit, type CommitConflict } from "./pre-commit.js";
 
 /**
@@ -55,23 +55,16 @@ function listStagedPaths(cwd: string): string[] {
 
 /**
  * THE SEAM (M5.1 issue #3): convert one staged repo-relative path to the
- * absolute, symlink-canonical form locks are checked under. repoRoot is
- * already realpath'd (S1c), and realpathSync makes the full path canonical
- * to match. A staged DELETION has no file to realpath (ENOENT) → fall back
- * to the plain join: the file is gone, and the joined path is the best-effort
- * match for its lock row.
- *
- * Residual risk (reported, not solved here): locks store agent-supplied paths
- * unnormalized, so a lock taken under a non-canonical path can evade this
- * gate — canonicalizing ONE side of the comparison cannot fix both.
+ * absolute, symlink-canonical form locks are stored and checked under. Since
+ * M6.1 the tools canonicalize with the SAME helper at their boundary, so both
+ * sides of the comparison are canonical by construction — the M5.2 residual
+ * risk (a lock stored under a non-canonical alias evading this gate) is
+ * closed. A staged DELETION is subsumed by the helper's walk-up: the file is
+ * gone but its parent exists, so the canonical parent + basename is exactly
+ * the string the lock row carries.
  */
 function toLockPath(repoRoot: string, staged: string): string {
-  const joined = join(repoRoot, staged);
-  try {
-    return realpathSync(joined);
-  } catch {
-    return joined;
-  }
+  return canonicalizePath(join(repoRoot, staged));
 }
 
 /** One line per conflict — path, holder (first 8 chars), branch, expiry. */

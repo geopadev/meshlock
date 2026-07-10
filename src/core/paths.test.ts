@@ -45,4 +45,14 @@ describe("canonicalizePath", () => {
     expect(() => canonicalizePath(missing)).not.toThrow();
     expect(canonicalizePath(missing)).toBe(resolve(missing));
   });
+
+  it("canonicalizes a missing MULTI-LEVEL suffix under a symlinked prefix (M6.2 walk-up)", () => {
+    // Neither newdir nor newfile.ts exists — the M6.1 sliver: single-level
+    // parent resolution fell to lexical resolve() here and kept the alias.
+    // The walk-up finds the deepest existing ancestor (the aliased dir),
+    // canonicalizes it, and re-joins the whole missing remainder.
+    const canonical = canonicalizePath(join(linkDir, "newdir", "newfile.ts"));
+
+    expect(canonical).toBe(join(realDir, "newdir", "newfile.ts"));
+  });
 });

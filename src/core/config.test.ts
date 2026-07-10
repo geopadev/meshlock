@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir, homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -39,6 +39,33 @@ describe("config", () => {
     expect(config.session_id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
     );
+  });
+
+  it("persists the default config on first load — the session_id survives a reload (M6.2)", async () => {
+    // No file exists yet: the first load must CREATE it, so identity is
+    // stable from first contact instead of a fresh random session_id per run
+    // (which made the hook see this machine's own locks as foreign).
+    const first = await loadConfig();
+
+    const onDisk = JSON.parse(
+      await readFile(getConfigPath(), "utf-8")
+    ) as { session_id: string };
+    expect(onDisk.session_id).toBe(first.session_id);
+
+    const second = await loadConfig();
+    expect(second.session_id).toBe(first.session_id);
+  });
+
+  it("a corrupt config file still throws and is NEVER overwritten (M6.2)", async () => {
+    // Corrupt = user data we can't parse — the refuse-to-clobber rule. Only
+    // an ABSENT file may be created.
+    const dir = join(tempHome, ".meshlock");
+    await mkdir(dir, { recursive: true });
+    const corrupt = "{ this is not json !!";
+    await writeFile(join(dir, "config.json"), corrupt, "utf-8");
+
+    await expect(loadConfig()).rejects.toThrow();
+    expect(await readFile(join(dir, "config.json"), "utf-8")).toBe(corrupt);
   });
 
   it("loads a valid config from disk", async () => {

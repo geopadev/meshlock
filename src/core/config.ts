@@ -48,8 +48,29 @@ export async function loadConfig(): Promise<Config> {
   let raw: string;
   try {
     raw = await readFile(path, "utf-8");
-  } catch {
-    return defaultConfig();
+  } catch (err) {
+    const fresh = defaultConfig();
+    // ABSENT file = fresh install: persist the default (with its freshly
+    // generated session_id) so identity is stable from first contact — a
+    // per-run random session_id would make the pre-commit hook see this
+    // machine's own MCP-taken locks as foreign and block its commits.
+    //
+    // CRITICAL: only ENOENT creates. An EXISTING file that merely failed to
+    // READ (permissions, I/O) is user data — never write over it (the M3.3b
+    // refuse-to-clobber rule; corrupt-but-readable files throw below for the
+    // same reason). Non-ENOENT read failures keep the old behaviour: an
+    // in-memory default, persisted nowhere.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      // Best-effort: a failed write (read-only home, quota) must not turn the
+      // previously-working absent-file case into a startup crash. Identity is
+      // per-run in that pathological case — no worse than pre-M6.2 behaviour.
+      try {
+        await saveConfig(fresh);
+      } catch {
+        /* keep the in-memory default */
+      }
+    }
+    return fresh;
   }
 
   const parsed = ConfigSchema.safeParse(JSON.parse(raw));
