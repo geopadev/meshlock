@@ -32,3 +32,6 @@ Escalate one level at a time, and only when the previous level hasn't worked:
 
 ## Working out where he left off
 At the start of a session, check the guide's checkboxes, `LEARNING-LOG.md`, `git log --oneline -10` and the current code, and confirm the step with him before teaching.
+
+## Commits
+Tell me when to commit and coach my commit messages; don't write them.
