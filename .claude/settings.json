@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit",
+      "Write",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git push *)"
+    ],
+    "allow": [
+      "Bash(pnpm vitest run)",
+      "Bash(pnpm vitest run *)",
+      "Bash(pnpm tsc --noEmit)",
+      "Bash(git status)",
+      "Bash(git diff)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ]
+  }
+}

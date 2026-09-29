@@ -1,0 +1,649 @@
+# MeshLock — Plan Deviation Log
+
+**Purpose:** The implementation plan (`meshlock-implementation-plan-v6.md`) is the
+canonical roadmap. But as we build, the architect splits milestones, reorders them,
+or inserts sub-tasks to respect the 6-file-per-prompt cap and the learning pace.
+Those changes live HERE so the architect numbering (e.g. `M3.1b`) never drifts
+silently from the plan's numbering, and so context survives across sessions.
+
+**How to read this:** "Plan says" = what v6 specifies. "We did" = what was actually
+built, in what order. "Why" = the reason for the deviation. Every architect-invented
+sub-number (anything not in v6) is marked **[architect-invented]**.
+
+**Status key:** ✅ done & reviewed · 🔨 in progress · ⏭️ skipped (with reason) · 📋 queued
+
+---
+
+## Numbering convention
+
+- v6 defines: M1, M2, **M2.5**, M3, **M3.5**, M4, M5, M6, M7, M8, M9, M10.
+- The architect may split any milestone into `Mx.1`, `Mx.2`, `Mx.1b`, etc.
+  These sub-numbers are **our** invention and do **not** appear in v6.
+- **Side-milestones** use an `S` prefix (S1, S2, ...). These are whole milestones
+  NOT in v6, spawned by an architecture decision/issue mid-build. They branch off
+  the issue rather than renumbering the M-sequence: they slot into BUILD ORDER at a
+  point but sit OUTSIDE the M-numbering, so v6's numbers never shift.
+- When reading v6, mentally map our sub-numbers back to the parent milestone; S-items
+  have no v6 equivalent at all.
+
+---
+
+## M1 — Project setup
+**Plan says:** repo + tooling, `core/db.ts` (SQLite wrapper + migrations + `locks`
+table), `core/config.ts` (zod schema + reader/writer). One milestone.
+
+**We did:**
+- ✅ **M1 (as built):** project skeleton + `config.ts` + `config.test.ts` only.
+  The DB layer was NOT built here despite the plan bundling it into M1.
+
+**Deviation:** `core/db.ts` and the `locks` migration slipped out of M1 and became
+the first sub-task of M2. The M1 learning log confirms only config + skeleton shipped.
+
+---
+
+## M2 — Core lock engine
+**Plan says:** `core/lock-engine.ts` (acquire/release/check/list/expireStale) with
+`BEGIN IMMEDIATE` race handling + full tests. One milestone. (DB layer assumed from M1.)
+
+**We did — split into three architect sub-tasks:**
+- ✅ **M2.1 [architect-invented]:** `core/db.ts` + `001_create_locks.sql` + `db.test.ts`.
+  The DB layer the plan had placed in M1. WAL mode locked (decision D2). Dep: `better-sqlite3`.
+- ✅ **M2.2 [architect-invented]:** `core/lock-engine.ts` + `lock-engine.test.ts`.
+  The five functions + `BEGIN IMMEDIATE` race handling. Two concurrency tests prove
+  serialization. (Tests landed in a second pass — first diff shipped engine without tests.)
+
+**Why split:** the DB layer was a genuine prerequisite the plan mis-placed in M1, and
+the 6-file cap + "this is the heart, take your time" warranted isolating the engine
+from its storage layer.
+
+**Decisions locked:** better-sqlite3 over node:sqlite; WAL over journal; discriminated-union
+returns (conflict as data, not exception); ISO-8601 string comparison for expiry.
+
+---
+
+## M2.5 — Branch-aware locking  ✅ (was skipped, caught, built & accepted)
+**Plan says:** insert between M2 and M3. Add `branch` column; change uniqueness from
+`UNIQUE(path)` → `UNIQUE(path, branch)`; `acquireLock` resolves git branch; cross-branch
+behavior via new `cross_branch_mode` config (`warn` default / `block` / `ignore`).
+Dep: `simple-git`. Files: lock-engine.ts, lock-engine.test.ts, config.ts, new migration.
+
+**What happened:** ⏭️ **SKIPPED.** We went M2 → straight to M3 (check_lock) without
+doing M2.5. Caught during the v6 plan re-read. M2.5 was a v4 insertion; the user
+conceived the branch-aware idea *after* M3 had already started, so it wasn't in view
+when M3 began.
+
+**Product rationale (user's, formalized):** cross-branch hard-blocking would make
+MeshLock fight git's parallel-work model — users would revert to plain git merge-conflict
+resolution and uninstall. So cross-branch defaults to **warn, not block**. But the warning
+isn't empty: both branches merge to main eventually, so the semantic risk persists — the
+warning is the seam M3.5's change briefing later fills. This is the differentiator vs git.
+
+**Resolution:** 🔨 doing M2.5 NOW, before M3.2 (the mutating MCP tools), because
+`acquire_lock`'s conflict logic is exactly what M2.5 rewrites — building it before M2.5
+would mean immediately rewriting it. `check_lock` (already built, read-only) gets branch
+retrofitted into its response cheaply later.
+
+**Scope decisions (RESOLVED):**
+- D-M2.5-a: ✅ `002` rebuild migration (proper table-rebuild pattern, not amending `001`).
+  `001` stays honest as "the schema at M2"; `002` demonstrates create-new/copy/drop/rename.
+- D-M2.5-b: ✅ branchless locks permissive — non-git-repo / detached HEAD stores NULL and
+  behaves like the M2 path-only lock. MeshLock does NOT hard-require git to lock a file.
+
+**Scope boundary:** M2.5 builds the branch dimension + warn/block/ignore decision ONLY.
+It does NOT build the change briefing — that's M3.5 (`changes.ts`). M2.5's cross-branch
+warning is just the hook M3.5 enriches.
+
+**BUILD OUTCOME (accepted):** Built with Opus 4.8/xhigh. 6 files (db.test.ts a forced 6th —
+002 changed the schema its assertions hardcoded; within cap). 36 tests pass (was 30).
+Highlights: null-safe SQL (`branch IS ?` not `=`, since SQL `=` never matches NULL);
+DELETE-then-INSERT replaced UPSERT (ON CONFLICT(path,branch) won't fire for NULL branches,
+so upsert would silently duplicate branchless rows); branchless-same-path block enforced by
+CODE not the constraint (the crucial test passed). M2 concurrency tests untouched. Engine
+stayed synchronous; no simple-git added.
+
+**Architect overrides on the build:**
+- Issue #1: agent kept `otherBranch: string | null` (not spec's `string`) — ACCEPTED, the
+  type shouldn't lie; a branchless lock genuinely has null branch. OPEN PRODUCT QUESTION:
+  should branchless (non-git) vs branched count as cross-branch conflict at all? Current
+  code: yes, warns. Architect lean: yes (branchless = no git isolation = more concerning).
+  Tracked in geopadev/meshlock#1 (deferred pending user feedback; warn default holds).
+
+**Follow-on items spawned by M2.5 (NOT done here):**
+- **[M3.2 wiring]** Double-default bug: engine `crossBranchMode` defaults to `"block"`,
+  config `cross_branch_mode` defaults to `"warn"`. If wiring forgets to pass config →
+  silent divergence (user set warn, gets block). FIX: single shared `DEFAULT_CROSS_BRANCH_MODE`
+  constant imported by both layers + an M3.2 config→engine wiring test.
+- **[M2.5b, after M3.2]** Plural-holder warning: `selectCross` uses `.get()` (one row), so a
+  path locked on 3 branches names only 1 in the warning. Defer until M3.2's acquire_lock tool
+  exists to consume the shape — then build `others: Array<{branch, heldBy}>` to fit the real consumer.
+- **[M3.2]** `check_lock` tool doesn't surface `branch` yet — engine returns it, tool output omits it.
+
+---
+
+## M3 — MCP server + tools
+**Plan says:** ONE milestone delivering `mcp/server.ts` + all four tools
+(`acquire_lock`, `release_lock`, `check_lock`, `team_status`) + `meshlock init`
+registration in Claude Code/Codex/Cursor configs. Live-test by watching raw JSON-RPC.
+
+**We did — split into architect sub-tasks (only first three done):**
+- ✅ **M3.1 [architect-invented]:** server skeleton + `check_lock` (read-only tool) only,
+  over stdio. Files: server.ts, tools/check-lock.ts, server.test.ts. Dep: `@modelcontextprotocol/sdk`.
+- ✅ **M3.1b [architect-invented]:** refactor — centralize DB path (`getDatabasePath()` in
+  config.ts) + move dir-creation into `openDatabase`. Pulled the `server.ts` workaround out.
+  Files: config.ts, db.ts, server.ts, config.test.ts.
+- ✅ **M3.2 [architect-invented]:** `acquire_lock` tool only (split from release_lock for cap).
+  simple-git enters (branch resolved in handler, before sync engine call — git I/O never in
+  the transaction). Branchless fallback (no repo/detached HEAD → null) tested. Double-default
+  bug FIXED: `DEFAULT_CROSS_BRANCH_MODE` constant in config.ts, imported by both defaultConfig
+  and engine fallback. Config DI'd into handler factory, loaded once in server.ts. 41 tests.
+  Files: acquire-lock.ts, acquire-lock.test.ts, config.ts, lock-engine.ts (constant swap only),
+  server.ts. Dep: simple-git ^3.36.0.
+- ✅ **M3.2b [architect-invented]:** `release_lock` tool. Thin sync adapter over engine's
+  releaseLock — branch-agnostic (no branch filter → one release drops all the session's locks
+  on that path across branches), ownership-scoped (config.session_id in WHERE), no-op-not-error
+  on unowned/absent locks. No git, no new dep, engine unchanged. 45 tests. Full lock lifecycle
+  (check/acquire/release) now exists in the MCP layer.
+- ✅ **M3.2c [architect-invented]:** `core/git.ts` — pure cached branch resolver. getCurrentBranch(cwd?)
+  defaults to process.cwd() (daemon repo root), maps detached/empty/error → null, never throws,
+  caches per-cwd for 5s (BRANCH_CACHE_TTL_MS) so a burst of calls = ≤1 subprocess/window. acquire-lock
+  now calls it (dropped inline resolveBranch + dirname(path)). Fixes M3.2 #1 (resolution base) + #2
+  (subprocess per call). git.test.ts uses real temp git repos → closes the named-branch coverage gap.
+  acquire-lock.test.ts: assertions unchanged, chdir-to-non-git-tempdir in setup (disclosed). 49 tests.
+  core/git.ts imports nothing from mcp/ — dependency direction intact.
+- ✅ **M3.3a [architect-invented]:** `team_status` tool. No-input read-only survey of all active
+  locks. Reads listLocks + getCurrentBranch (2nd consumer of the helper), formats a text block,
+  marks own-branch locks (`lock.branch === currentBranch`, null===null handled). Empty → "No active
+  locks." config passed but unused (`void config`, signature uniformity). 53 tests. M3 tool set now
+  COMPLETE: check / acquire / release / team_status.
+## S1 — Repo scoping  📋 [SIDE-MILESTONE — not in v6]
+
+**Why this exists (the deviation):** During M3.3b planning we decided `meshlock init` should
+register the MCP server **user-globally** (one registration, all repos) rather than project-level,
+because not all agents support project-level config. But a globally-launched server has no
+inherent idea WHICH repo a given tool call concerns, and the current design assumes one global
+DB at `~/.meshlock/meshlock.db` with lock identity `(path, branch)`. Under global registration
+that breaks: multiple repos' locks collide in one DB, and `process.cwd()` may not be the agent's
+repo. So locks must be scoped by repo. This is an architecture requirement surfaced by the
+registration decision — a whole milestone with NO v6 equivalent. Hence a side-milestone (S1),
+slotted before `meshlock init` in build order without disturbing the M-numbering.
+
+**Decision — Option B (global DB + repo_root column), chosen for relay-conformance:**
+- Considered: (A) DB-per-repo file; (B) one global DB with a `repo_root` column; (multi-table
+  per repo = rejected anti-pattern). Chose B because the M8 relay broadcasts lock events tagged
+  by repo — with `repo_root` as a first-class column the tag travels with the row; with per-repo
+  files the repo identity lives in the file path and must be reattached out-of-band. B conforms
+  to where the relay goes. (Architect initially leaned A, revised to B after tracing the relay
+  forward — logged honestly.)
+- **`repo_root` is a SENTINEL, never NULL:** resolved via `git rev-parse --show-toplevel` on
+  `dirname(path)`. (Note: dirname(path) is CORRECT here — repo membership is a property of where
+  the file lives — unlike branch resolution, which is a repo property and uses cwd.) For a
+  non-git file, the sentinel is the file's absolute directory. Keeping repo_root non-null avoids
+  the NULL-uniqueness trap (M2.5) for this column. `branch` stays nullable as before.
+- Lock identity becomes `(repo_root, path, branch)`. Every engine query gains a repo_root filter
+  — this is the cross-repo-leak risk: a forgotten filter leaks locks across repos.
+- Caller (the MCP tool) resolves repo_root via a new `getRepoRoot()` in core/git.ts and passes
+  it into the synchronous engine — git I/O stays out of the transaction (same discipline as branch).
+
+**Planned split (S1a split further — engine change isolated from migration, à la M2.1/M2.2):**
+- ✅ **S1a:** `getRepoRoot(cwd?)` in core/git.ts (non-null sentinel = resolve(cwd) outside a repo;
+  separate repoRootCache from branchCache, shared TTL; clearBranchCache clears both) + `003`
+  migration (rebuild locks, repo_root TEXT NOT NULL **DEFAULT '(unknown)'**, UNIQUE(repo_root,path,branch))
+  + schema/git tests. STORAGE ONLY — engine untouched (engine tests pass unchanged = proof). 56 tests.
+  ⚠️ CARRIED INTO S1b: the `DEFAULT '(unknown)'` was needed because the un-updated engine INSERT omits
+  repo_root. It must be RESOLVED in S1b — once the engine supplies repo_root explicitly, REMOVE the
+  default so a missing value fails LOUD instead of silently bucketing into '(unknown)' (an identity
+  column should never silently default). Until S1b, all locks share repo_root='(unknown)' — scoping
+  is inert by design at this stage.
+- ✅ **S1b:** engine identity now (repo_root, path, branch). All five functions repo-scoped; every
+  WHERE leads with `repo_root = ?` (plain `=` — non-null sentinel; branch keeps `IS`). checkLock/listLocks
+  gained a repoRoot arg (now per-repo). repoRoot is a REQUIRED input (no default) — type-level guard;
+  forgetting it is a compile error. `004` migration drops the repo_root DEFAULT → missing repo_root now
+  fails loud. expireStaleLocks deliberately stays GLOBAL (reaping dead rows is repo-agnostic; commented).
+  Isolation test proves same-path+branch in different repos coexist (the cross-repo-leak proof). M2.5
+  branch logic wrapped not rewritten (its tests pass with repo_root added). 29 core tests pass in isolation.
+  ⚠️ EXPECTED: the MCP tools do NOT compile until S1c supplies repoRoot — the required-param forcing
+  function. Repo is a known-red intermediate between S1b and S1c; do S1c next to restore a building tree.
+- ✅ **S1c:** repo_root threaded through all four tools. Per-path tools (acquire/release/check)
+  resolve getRepoRoot(dirname(path)); team_status resolves getRepoRoot() (cwd, daemon's repo →
+  per-repo survey). check_lock/release_lock became async (await getRepoRoot before the sync engine
+  call). Sentinel now uses realpath (matches git's symlink-resolved --show-toplevel; resolve()
+  fallback keeps never-throws). server.test.ts also updated (consumes now-async check handler).
+  tsc clean, full pnpm test GREEN — 57 tests. Tree builds again. **S1 (repo scoping) COMPLETE.**
+  ⚠️ RESOLVED (S1c issue #1): chose (a) — acquire_lock resolves branch from getCurrentBranch(dirname(path))
+  too, so repo_root and branch both come from the file's repo → lock is coherent by construction,
+  generalizes to multi-repo. One-line change. Folded into M3.3b (or applied as a tiny fix alongside it).
+
+**Then** (after S1): M3.3b `meshlock init` registers the now-repo-aware server user-globally.
+
+---
+
+- ✅ **M3.3b [architect-invented]:** `meshlock init` MACHINERY. CLI dispatcher (src/cli/index.ts,
+  shebang) — `init` registers, `serve`/bare boots the server, unknown → usage on stderr. package.json
+  `bin` maps meshlock → dist/cli/index.js. startServer() extracted+exported from server.ts (one boot
+  path, unchanged). registerMeshlock() does READ-MERGE-WRITE on ~/.claude.json top-level mcpServers
+  (preserves other servers + top-level keys, idempotent, refuses to overwrite unparseable config,
+  injectable path for tests). S1c-issue-#1 fix applied: acquire_lock branch now getCurrentBranch(dirname(path)).
+  Config format VERIFIED live (not assumed) against Claude Code v2.1.185. 61 tests. Reconciled the
+  M3.2c branch-base apparent-flip-flop (premise changed: daemon went user-global, so cwd ≠ file's repo).
+  ⚠️ RESOLVED (M3.3b issue #1): chose `command: "node"` (PATH-relative) over process.execPath —
+  survives nvm Node upgrades (exact-binary path would vanish → silent un-registration). Assumes the
+  right node is first on PATH (rare + loud failure if not). One-line change, folded into M3.3c.
+- 🔨 **M3.3c [architect-invented]:** two halves.
+  - ✅ AUTOMATED half DONE: command:"node" fix applied; synthetic registration test added — real
+    Client + InMemoryTransport.createLinkedPair() + listTools() round-trip through createServer,
+    asserts exactly the 4 tool names (catches a tool that works in isolation but isn't registered).
+    Closes the createServer-wiring test gap open since M3.2. 62 tests.
+  - ✅ LIVE half DONE (2026-06-23): registered in real Claude Code, agent ran the FULL lifecycle over
+    live JSON-RPC — check_lock (FREE) → acquire_lock (branch main, repo_root resolved) → team_status
+    (marked "← your branch", M3.3a firing live) → release_lock. Verified independently via sqlite3:
+    lock row written by the agent (repo_root=/home/george/projects/meshlock, path, branch=main, session,
+    expiry), then EMPTY after release. command:"node" resolved correctly in WSL/nvm (the spawn risk did
+    NOT materialize). Validated together: S1 repo-scoping, M2.5 branch-awareness, M3.3a own-branch mark,
+    M3.3b read-merge-write registration, full 4-tool surface. **M3 (MCP server) COMPLETE.** First
+    demo-able moment reached — promotion now unblocked.
+  - ✅ LIVE STRESS TEST A (2026-06-23): two separate Claude Code sessions (distinct session_ids),
+    same path. T1 acquired src/core/lock-engine.ts (session fe0be975…). T2 acquire DENIED with a clean,
+    informative message naming the holder + guidance ("Could not acquire … LOCKED by session fe0be975…
+    Back off and retry later, or coordinate"). sqlite3 confirmed exactly ONE row (T2 neither duplicated
+    nor overwrote). After release, T2 re-acquired successfully → full hand-off proven. Cross-session
+    conflict path validated live. NOTE: denial names session + gives guidance (strength) but not the
+    expiry time — minor UX gap. The "what's being changed" gap is M3.5.
+  - ✅ LIVE STRESS TEST B (2026-06-23): three parallel Claude Code SUBAGENTS acquired the same path.
+    All three returned "Acquired"; sqlite3 showed exactly ONE row. CORRECT, NOT a bug: subagents inherit
+    the parent's single config session_id, so the engine saw one session refreshing its own lock
+    (same-session DELETE-then-INSERT, M3.2). BEGIN IMMEDIATE held (one row, no duplicates) — race safety
+    intact, re-confirming M2.2. (Claude Code's first self-diagnosis "BEGIN IMMEDIATE broken / race
+    condition" was WRONG and it retracted it; the one-row result disproves a serialization failure.)
+    FINDING: agent identity is per-config → independent concurrent callers are invisible to each other.
+    Fine for solo; foundational identity question for M8 team mode. Parked in BACKLOG. No code change now.
+
+**Why split:** four tools + init registration far exceeds the 6-file cap and mixes concerns;
+`check_lock` first (read-only) de-risks the transport/registration plumbing before any
+state-mutating tool touches it.
+
+**Ordering note:** M3.1/M3.1b were built BEFORE M2.5, slightly out of plan order. Acceptable
+because check_lock is read-only (cheap to retrofit branch). The mutating tools (M3.2+) are
+correctly being held until M2.5 lands.
+
+---
+
+## M3.5 — Change briefing (the differentiator)  🔨
+**Plan says:** insert between M3 and M4. New `core/changelog.ts` + `file_changelog`
+migration; record diff summary on release; enrich `acquire_lock` response with recent
+change history. Solo only (cross-machine is M8). Files: changelog.ts, changelog.test.ts,
+migration, lock-engine.ts (release hook), tools/acquire-lock.ts.
+
+**NAMING DEVIATION:** plan's `changelog.ts` / `file_changelog` renamed to **`core/changes.ts`**
+and the **`change_log`** table ("changelog" reads like release-notes; "change_log" reads like a
+log of changes). The git-diff helper lives separately in **`core/diff.ts`**.
+
+**Pre-M3.5a investigation gate (resolved 2026-06-26):** confirmed `lock_mode: "advisory"` is a
+declared-but-unenforced false affordance — plumbed and stored, but acquireLock never branches on
+it (full detail + decision in BACKLOG). Consequence: every lock today behaves as exactly one thing,
+so M3.5 captures ONE lock behaviour and advisory is parked. The gate simplified the milestone.
+
+**Split [architect-invented]:** M3.5a = storage/capture foundation (table + changes.ts + diff
+helper, NO wiring); M3.5b = acquire-time snapshot capture (engine acquire path); M3.5c = release
+recording + acquire briefing (the payoff).
+
+**We did:**
+- ✅ **M3.5a [architect-invented]** (Opus 4.8/xhigh): `005_change_log.sql` — ALTER locks ADD
+  `content_snapshot` (in-place, NULLABLE, NO default; the deliberate INVERSE of S1a's non-null
+  repo_root — a missing baseline is legitimate, not a bug) + CREATE `change_log` (surrogate `id`,
+  NO UNIQUE on (repo_root,path,branch) — it's a LOG, many rows per identity is the feature, vs
+  `locks` as STATE). `core/changes.ts` (recordChange/getChanges; pure repo-scoped storage; `?? null`
+  coalescing for better-sqlite3's undefined-rejection; every WHERE leads with `repo_root = ?` per S1;
+  three-way branch filter omitted/string/null). `core/diff.ts` (`diffContent` via `git diff --no-index`,
+  `spawnSync` so exit-1 = "files differ" = success, NOT a throw; scratch temp dir cleaned in `finally`;
+  identical inputs → ""). db.test.ts forced update (column-set + migration-list assertions). 78 tests
+  (was 62, +16). `diff` NOT NULL = the floor; `summary`/`diff_stat` nullable = enrichment; storage is
+  dumb (records unconditionally — the skip-empty policy is M3.5c's). Additive improvement ACCEPTED:
+  `ORDER BY changed_at DESC, id DESC` — `id` as a deterministic same-millisecond tiebreak (tested).
+- ✅ **M3.5b [architect-invented]:** acquire-time snapshot capture — `Lock.content_snapshot` +
+  `AcquireInput.contentSnapshot`, threaded through all 4 Lock-returning queries + the INSERT. Tool
+  (`acquire-lock.ts`) reads the file sync outside the txn, error→null (engine stays fs-free). Capture-
+  or-preserve: initial acquire stores the injected baseline; same-session refresh (`same.session_id
+  === sessionId`) PRESERVES the existing snapshot, discarding the incoming one (re-snapshotting on
+  renewal would reset the baseline mid-edit, under-reporting the eventual diff); a different-session
+  expired row is a TAKEOVER not a refresh and correctly captures the new holder's baseline. 84 tests
+  (was 78, +6: keystone refresh-preserve, initial-store, null/omitted, expired-takeover; +2 tool tests).
+  Fragile seam: refresh-preservation depends on reading `same.content_snapshot` BEFORE
+  `deleteSame.run()` — the keystone test is the tripwire if that ordering is ever disturbed.
+- ✅ **M3.5c [architect-invented]:** the payoff — release records, acquire briefs. `release-lock.ts`:
+  `checkLock` (read baseline + branch BEFORE `releaseLock` deletes the row) → release → if
+  `released && held.held`, binary-guard then `diffContent(snapshot ?? "", current ?? "")` →
+  `recordChange`. New optional `summary` input (zod `.optional()`, passthrough). `acquire-lock.ts`:
+  after a successful acquire, `getChanges({repoRoot, path, branch, limit:5})` appended as a "Recent
+  changes" block (diffPreview/formatChange helpers; headline = diff_stat ?? summary ?? diff preview;
+  empty history → no section). Binary guard = NUL byte either side → skip diff+record (no row, no
+  error), AT THE TOOL not in diffContent (single responsibility). Empty diff = the floor, recorded.
+  Engine untouched. 91 tests (was 84, +7). **M3.5 (change briefing) COMPLETE end-to-end: capture →
+  diff → record → brief. The differentiator works.**
+
+**Follow-ons spawned by M3.5c (NOT done here):**
+- **[gap → SUPERSEDED by M5.1c]** Expired-but-owned release records nothing (no live baseline via
+  checkLock), AND (found at M5.1) multi-branch coexistence can hand release a FOREIGN row to baseline
+  against. Both fixed by M5.1c: `releaseLock` returns the row(s) it deleted; the tool consumes that
+  instead of checkLock.
+- **[chore, low priority]** `readCurrentContent` (release) and `captureSnapshot` (acquire) are
+  near-identical utf-8-read-or-null helpers; DRY into a shared util.
+
+**Follow-ons spawned by M3.5b (NOT done here):**
+- **[M3.5c]** Binary files: `captureSnapshot` does `readFileSync(path,"utf-8")`, which decodes binary
+  content lossily — the snapshot (and any diff against it) is meaningless for non-text files. No guard
+  exists. M3.5c must decide: skip snapshot/diff for detected-binary files, or store differently
+  (base64) — before binary files hit the diff path for real.
+- **[minor, low priority]** `captureSnapshot` runs before the conflict check, so a blocked acquire
+  still pays a wasted file read.
+- **[minor, low priority]** `listLocks` now selects `content_snapshot`, so `team_status` materializes
+  every lock's snapshot blob into memory though it never renders it. Fix = a projection query for
+  `listLocks` that omits the column (only `checkLock` needs it, for M3.5c's release-time diff).
+
+**Follow-ons spawned by M3.5a (NOT done here):**
+- **[M8/M9]** Diff header noise: stored diffs still embed `git diff --no-index` absolute temp-path
+  headers (`---`/`+++`/`diff --git`). M3.5c worked around it for the acquire briefing by filtering to
+  +/- lines in `diffPreview`, but the STORED diff is still noisy. Fine while the only consumer is the
+  briefing preview; normalize at capture (before `recordChange`) before any other consumer reads the
+  raw stored diff — the relay sync (M8) or the VS Code panel (M9).
+- **[M3.5b/c]** `diff_stat` column exists but nothing computes it (always NULL today) — intentional
+  per spec; compute it at capture in M3.5b/c. Tracked so the empty column isn't mistaken for a bug.
+- **[CLAUDE.md]** Add a `changes` commit scope — the briefing subsystem (changes.ts / diff.ts /
+  change_log) is its own area; committing it under `lock-engine` misattributes it.
+
+> Product-level M3.5a follow-ons (change_log retention/pruning; snapshot storage + temp-file-I/O perf)
+> live in BACKLOG.md, not here.
+
+---
+
+## M4 — Watcher daemon  🔨
+**Plan says:** watcher daemon (chokidar) + `daemon/index.ts`. One milestone.
+
+**Split [architect-invented]:** M4.1 = watcher core (chokidar wrap, debounce, normalized events — no
+lock logic) → M4.2 = lock-aware classification (event → guarded/unguarded) → M4.3 = daemon process +
+CLI wiring + config + logging policy. Sensor-first de-risks the async/fs machinery before lock
+semantics enter (same play as M3.1). Builder = Fable 5 (sprint), teaching passes skipped →
+docs/TEACHING-BLOCK.md.
+
+**We did:**
+- ✅ **M4.1 [architect-invented]** (Fable 5): `daemon/watcher.ts` — `createWatcher(root, onEvent,
+  options?) → {ready, close()}`. Per-path debounce timers (default 100ms) coalesce bursts to one
+  `{type: add|change|unlink, path, at}` event; within a window last type wins EXCEPT add→change stays
+  "add" (creation burst). Segment-name ignore defaults `.git`/`node_modules`/`.meshlock` (the last so
+  the daemon never feeds on its own SQLite/WAL writes) — config-free by design. `ignoreInitial: true`
+  (startup files are state, not events). No-op `error` listener (an unhandled chokidar error would
+  kill the process; logging policy is M4.3's). `close()` cancels pending timers (drops, not flushes).
+  Pure sensor: no DB/config/lock imports; root+callback injected. 5 real-fs tests incl. burst-coalesce
+  and a control-write proving ignored-silence ≠ broken. 96 tests (was 91, +5). New dep chokidar ^4.0.3
+  (node:fs.watch non-recursive/unreliable; @parcel/watcher needs native build). Additive improvements
+  accepted: `ready` promise, add→change coalesce rule, cross-platform segment split.
+- ✅ **M4.2 [architect-invented]** (Fable 5): `daemon/classify.ts` — `Verdict` discriminated union
+  (`guarded` + live `Lock` row attached / `unguarded`, both carrying the full WatchEvent through so
+  M4.3 policy can special-case delete-under-lock without re-querying) + `classifyEvent(db, repoRoot,
+  event)`: one `checkLock` call, pure/synchronous, repoRoot injected. Expired ⇒ unguarded (checkLock
+  treats expired as free); cross-repo isolation holds (S1). Two limits documented inline: attribution
+  (live lock ≠ holder made this edit — OS events carry no identity; parked at M8) and branch (guarded
+  = locked on SOME branch; checkLock is path-level). 5 synthetic tests, real SQLite, no chokidar.
+  101 tests (was 96, +5). Fragile seam flagged by Builder: if checkLock ever becomes branch-aware,
+  covered edits flip to false "unguarded" — the cross-repo test is the template for that milestone's
+  branch-dimension test.
+- ✅ **M4.3 [architect-invented]** (Fable 5): `daemon/index.ts` — `startDaemon({db, repoRoot, sink?})
+  → {ready, close()}`; policy: unguarded → one stderr line, guarded → deliberate silence, watcher
+  error → one line + keep running; no process.exit/signals in the factory (CLI owns process shape).
+  `cli/index.ts` `watch` command: loadConfig fail-fast → openDatabase → getRepoRoot(cwd) once →
+  startDaemon; SIGINT/SIGTERM → close watcher → close DB → exit 0. Watcher fixes landed: (a)
+  `onError?` callback (default stays absorb-silent), (b) add→unlink in one window cancels to nothing.
+  +6 tests (real EACCES via chmod-000 subdir; DB in a SEPARATE temp dir — inside the watched tree it
+  self-feeds, the .meshlock-ignore's raison d'être). 107 tests (was 101). E2E verified: banner →
+  UNGUARDED line → SIGINT → exit 0. **M4 (watcher daemon) COMPLETE.**
+
+**Follow-ons spawned by M4.3 (NOT done here):**
+- **[next prompt — DECIDED]** Raise `DEFAULT_DEBOUNCE_MS` 100→200: chokidar's atomic mode delays
+  cross-process unlink delivery ~100ms, pushing add→unlink pairs across two windows so the cancel
+  misses (`touch x && rm x` still emits). 200ms re-captures the pair; +100ms warning latency is
+  irrelevant for a human-read detector; `atomic:false` would un-filter editor atomic saves (worse).
+  One-constant chore — fold into the next build prompt.
+- **[M4.x/M6]** Self-feed loop observed live: `meshlock watch 2>log.txt` with the log inside the repo
+  loops at debounce cadence (warning writes log → change event → warning). Real fix: per-path warning
+  dedupe/rate-limiting in the daemon — which also softens the bulk-op checkLock hammering follow-on
+  (same mechanism). Until then: document "keep logs outside the watched tree".
+- **[chore, minor]** Double Ctrl-C re-enters `shutdown` (second close harmless today; guard the handler).
+
+**Follow-ons spawned by M4.2 (NOT done here):**
+- **[M4.3]** Per-event `checkLock` is fine at human editing rates but a bulk op (branch switch,
+  `pnpm install`) hammers SQLite with thousands of lookups — consider batching/rate-limiting upstream
+  in the daemon loop.
+
+**Follow-ons spawned by M4.1 (NOT done here):**
+- **[M4.3]** Watcher errors are absorbed by a no-op listener; real surfacing/logging policy lands with
+  the daemon process.
+- **[M4.3 — DO IT]** add→unlink within one debounce window emits `unlink` for a file observers never
+  saw added (transient temp files). M4.2 upgraded this from cosmetic to real: such a bare `unlink` on
+  a locked path yields a false delete-under-lock verdict. Fix in M4.3: cancel the add→unlink pair to
+  nothing in the watcher's coalesce rule.
+- **[M4.3]** `options.ignore` REPLACES defaults — passing `["dist"]` silently re-enables watching
+  `.git`/`node_modules`. Decide merge semantics or an `ignoreDefaults` flag when config wires in.
+- **[M4.3]** Segment-name matching ignores ANY dir named `.git`/`node_modules`/`.meshlock` anywhere
+  under root — over-broad if user content uses those names. Revisit when the daemon knows real paths.
+
+---
+
+## M5 — Git pre-commit hook  🔨
+**Plan says:** pre-commit hook blocking commits over others' locks. One milestone.
+
+**Split [architect-invented]:** M5.1 = pure decision logic → **M5.1b = checkLock branch filter
+(engine gap found by M5.1)** → **M5.1c = releaseLock returns deleted row (same gap's release-side
+fix)** → M5.2 = shell shim + installer + CLI.
+
+**We did:**
+- ✅ **M5.1 [architect-invented]** (Fable 5): `hooks/pre-commit.ts` — `checkCommit(db, {repoRoot,
+  branch, sessionId, stagedPaths}) → HookVerdict` (discriminated union; blocked variant carries ALL
+  conflicts + full lock rows). Rule: block iff live ∧ foreign ∧ same-branch (JS null===null
+  reproduces the engine's `branch IS ?`); cross-branch passes (M2.5 consistency); own locks never
+  block. 8 synthetic tests incl. the three silent-wrong risks. Folded chore: DEFAULT_DEBOUNCE_MS
+  100→200 (e2e-verified: touch+rm now zero events). 115 tests (was 107, +8).
+- ✅ **M5.1b [architect-invented]** (Fable 5): `checkLock(db, repoRoot, path, branch?: string | null)`
+  — omitted = historical any-branch lookup (byte-identical SQL; classify/check_lock tool deliberately
+  unchanged); provided (string or null) = `AND branch IS ?` (three-way convention symmetric with
+  getChanges). Hook passes `input.branch` (string|null, never undefined → always filtered) and DROPS
+  its own comparison; branch limit recorded as resolved for this consumer. +6 tests incl. the
+  previously-flaky pair made deterministic (feature-seeded-first ordering that fooled the unfiltered
+  scan → now blocked with the MAIN row). 121 tests (was 115). Grep-confirmed only the hook changed
+  callers.
+- ✅ **M5.1c [architect-invented]** (Fable 5): `releaseLock` returns `Lock[]` (deleted rows, ORDER BY
+  branch; [] = no-op) via SELECT-then-DELETE under BEGIN IMMEDIATE (both statements must observe the
+  same rows). Release tool: pre-read checkLock + `held.held` gate DELETED; one current-content read,
+  then per deleted row binary-guard → diff(row.content_snapshot ?? "", current ?? "") → recordChange
+  with row.branch. Intended consequences: expired-but-owned releases now RECORD (M3.5c lost-record
+  gap closed); multi-branch release records one change per branch against its own baseline; foreign
+  rows unreachable (ownership scoping). checkLock omitted-branch gains `AND expires_at > ?` (any-
+  branch now means any LIVE row — false-free/false-UNGUARDED over an expired sibling fixed); filtered
+  path deliberately untouched (≤1 candidate ⇒ post-fetch equivalent; belt kept both paths). 128 tests
+  (was 121, +7); all three pins green (expired-owned records; expired+live-sibling held/guarded;
+  multi-branch per-branch records).
+- ✅ **M5.2 [architect-invented]** (Fable 5): `hooks/run.ts` — runPreCommit({db,cwd,sessionId}) →
+  {exitCode, message}; staged via `git diff --cached --name-only -z`, NUL-parsed (never line-split);
+  the SEAM: realpath'd repoRoot + join + realpathSync per path, staged-deletion ENOENT → plain-join
+  fallback; blocked → exit 1 listing every conflict (rel path, holder-8, branch, expiry) + hint;
+  FAIL-OPEN at two belts (runtime catch + CLI deps-assembly catch): any internal error → exit 0 +
+  warning; exit 1 reserved for a positive verdict. `hooks/install.ts` — marker-gated (`# meshlock-hook
+  v1`) shim, PATH-relative `meshlock` (M3.3b lesson), chmod 0755 unconditional (writeFileSync mode
+  only applies on create), foreign hook → refuse byte-intact, own marker → idempotent upgrade.
+  CLI: install-hook + hook pre-commit. 141 tests (was 128, +13). E2E: install → clean pass → foreign
+  lock blocks exit 1 → release → pass; foreign-hook refusal intact. **M5 (pre-commit hook) COMPLETE
+  — MeshLock warns (M4) and enforces (M5).**
+
+**Follow-ons spawned by M5.2 (NOT done here):**
+- **[M6.1 — SCHEDULED]** Unnormalized lock paths: locks store agent-supplied paths as-is; the hook
+  canonicalizes only its side, so a lock acquired under a symlinked/`..`/case-variant path evades the
+  gate — silent under-enforcement. Fix = canonicalization at the MCP tool boundary (acquire/check/
+  release), shared helper; hook adopts the same helper next.
+- **[M6.2 — DO IT]** Ephemeral default session identity: loadConfig() without a config file returns a
+  fresh random session_id and never persists → a hook run in that state mismatches the committer's
+  OWN locks (self-block). Decision: persist the default config on first load.
+- **[minor]** `core.hooksPath` override silently redirects git away from .git/hooks → install-hook
+  becomes a no-op. Detect at install time (`git config core.hooksPath`) and refuse loudly.
+- **[note]** The 5s git-fact cache is inert in the one-shot hook process; only matters if runtime and
+  daemon ever share a process (stale branch within 5s of a checkout).
+
+---
+
+## M6 — CLI commands + run wrapper  🔨
+**Plan says:** `meshlock init / status / unlock <file> / upgrade` + `cli/wrapper.ts` (`mesh run
+claude "..."`: pre-check locks, spawn agent child w/ inherited stdio, post-scan `git diff HEAD`,
+flag unlocked modifications, propose commit message). Sonnet 4.6 per v6.
+
+**Split [architect-invented]:** M6.1 = path canonicalization at the MCP tool boundary (the M5.2
+under-enforcement fix — gate integrity first) → M6.2 = status + unlock commands + persist-default-
+config fix (`upgrade` scope call here) → M6.3 = run wrapper.
+**We did:**
+- ✅ **M6.1 [architect-invented]** (Fable 5): `core/paths.ts` — `canonicalizePath`, three never-throw
+  tiers: existing → realpathSync; missing file → realpath(parent)+basename (kills symlinked-prefix
+  variance pre-creation); parent missing → lexical resolve() (sentinel spirit). Applied first-line in
+  acquire/check/release handlers (before the dirname()-based branch/repo resolvers, which now see the
+  canonical form); team_status untouched (no path input). Evasion pin closed: alias-acquired lock is
+  stored canonical and found by a canonical hook-style lookup. No migration (TTL-short rows age out).
+  145 tests (was 141, +4).
+- ✅ **M6.2 [architect-invented]** (Fable 5): fixes bundle [ratified]. (1) Walk-up canonicalization —
+  dirname() to the deepest EXISTING ancestor, realpath it, re-join the missing remainder; terminates
+  at the root; lexical resolve() only as pathological catch; M6.1 sliver pinned closed. (2) Config
+  persistence — ENOENT (and ONLY ENOENT — an unreadable-EACCES existing file is still never written,
+  stricter than spec, accepted) → saveConfig(default), best-effort (write failure → in-memory
+  default, no crash); identity stable from first contact, hook self-block ended; corrupt file still
+  throws byte-intact. (3) Hook toLockPath = canonicalizePath(join(repoRoot, staged)) — deletion
+  fallback subsumed by the walk-up; run.test.ts needed ZERO changes (the predicted subsumption
+  proof). 148 tests (was 145, +3).
+- ✅ **M6.2b [architect-invented]** (Fable 5): atomic saveConfig — same-dir tmp (pid+hex) + rename(2);
+  kill leaves old-or-new, never truncated JSON; failed rename unlinks the orphan. TWO beyond-spec
+  fixes ACCEPTED as regression prevention vs old writeFile (verifier-driven, pinned): rename target
+  resolved through canonicalizePath so a symlinked config.json is written THROUGH not replaced; the
+  existing file mode mirrored onto the tmp so chmod 600 survives (rename would install umask 644).
+  loadConfig JSON.parse wrapped — corrupt now throws "Invalid JSON in config at <path>" (message
+  only; ENOENT/corrupt/EACCES semantics untouched, M6.2 pins green). `meshlock status`:
+  cli/status.ts formatStatus — repo-scoped listLocks, empty message, aligned table (rel path w/
+  absolute fallback for a repo-root lock, holder-8 + (you), branch or -, mode, remaining), stdout =
+  the product. 156 tests (was 148, +8). E2E incl. live MCP acquire. SIDE-FINDING: a serve started
+  pre-persistence holds an in-memory session ≠ the persisted one — one restart converges identities.
+- 📋 **M6.2c — NEXT** [ratified]: `meshlock unlock <file>` — own-session default reuses the release
+  handler (briefings record); `--force` deletes ANY lock via new engine forceReleaseLock (NO
+  briefing — foreign baseline isn't ours; flagged+accepted). Strict arg parsing (first CLI flag).
+  · 📋 **M6.3** run wrapper. (`upgrade` → BACKLOG, ratified.)
+
+**Follow-ons spawned by M6.2b (NOT done here):**
+- **[chore, minor]** Orphaned config tmp files from killed processes accumulate in ~/.meshlock
+  (~300B, cosmetic) — age-based sweep at load would tidy.
+- **[note]** fsync-grade durability deliberately omitted; revisit only if config ever holds
+  crash-critical data. Symlink re-point mid-save lands on the old target (rare, self-heals).
+- **[chore]** Commands silently ignore extra argv — strictness pass as the CLI grows flags (M6.2c
+  starts it for unlock).
+
+**Follow-ons spawned by M6.2 (NOT done here):**
+- **[OPEN — consult]** saveConfig is a non-atomic writeFile, and it now runs UNATTENDED on first
+  load: a process killed mid-write leaves truncated JSON that bricks every future loadConfig until
+  hand-deleted — the one wedge path this change added. Fix: tmp-file + rename (~5 lines). Related
+  chore: corrupt-JSON failures surface as a raw SyntaxError naming no file path — one-line wrap
+  makes the wedge diagnosable.
+- **[note, pre-existing]** resolve() can throw when the process cwd was deleted (uv_cwd) — relative
+  inputs only, pathological, unchanged by M6.2.
+- **[note, verified]** A staged deletion whose parent dir was symlink-swapped DURING the lock's
+  lifetime misses where the old code coincidentally blocked; the new behaviour is the consistent one
+  (tool-side check on the same fs state computes the same string). Inherent to fs mutation between
+  acquire and check.
+- **[chore, pre-existing]** config.test.ts carries an inert vi.resetModules() and an unused homedir
+  import.
+
+**Follow-ons spawned by M6.1 (NOT done here):**
+- **[M6.2 — SCHEDULED]** `hooks/run.ts` still builds absolute paths without the shared helper —
+  adopt `canonicalizePath` so hook lookups match tool-stored rows byte-for-byte.
+- **[OPEN — consult]** Tier-3 fallback is lexical: a symlink above a MISSING multi-level suffix
+  (alias/newdir/newfile.ts, newdir absent) survives canonicalization — a sliver of the hole stays
+  open for deep-locking-before-mkdir. Walk-up variant (realpath deepest existing ancestor, re-join
+  the rest) closes it; ~10 lines.
+- **[note]** One realpathSync per tool call — negligible at agent rates.
+
+**Follow-ons spawned by M5.1c (NOT done here):**
+- **[trap, note]** releaseLock now opens its own transaction — a future caller inside an outer
+  transaction on the same connection throws ("cannot start a transaction within a transaction")
+  where the old bare DELETE joined it. Loud, not silent; known.
+- **[chore, minor]** Per-row changedAt stamps in a multi-branch release differ by ms; a single shared
+  stamp would group one release's records (cosmetic — id tiebreaker already orders).
+- 📋 **M5.2 [architect-invented]:** shell shim + installer + CLI wiring. SEAM (from M5.1 issue #3):
+  the shim converts repo-relative staged paths to the EXACT absolute strings locks record — S1c
+  realpath discipline applies; goes verbatim into the prompt.
+
+**Follow-ons spawned by M5.1b (NOT done here):**
+- **[perf, low]** checkLock re-prepares its statement per call (better-sqlite3 caches, but the hook
+  calls once per staged path) — possible hoist if commit-time latency ever shows.
+- **[note]** releaseLock stays branch-agnostic (drops all the session's per-branch rows on a path)
+  while acquire/check are branch-scoped — the existing BACKLOG selective-per-branch-release item now
+  has a concrete consumer question attached.
+
+**Follow-ons spawned by M5.1 (NOT done here):**
+- **[perf, low]** One synchronous checkLock per staged path — a thousand-file commit pays a thousand
+  point queries; a single `WHERE path IN (…)` pass exists if it ever matters.
+- **[note]** Watcher suite runtime ~5.9s (was ~3.2s) — settle waits scale with the doubled debounce.
+  Known trade, not drift; revisit only if suite time becomes a drag.
+
+---
+
+## M7–M10 — not yet reached
+- 📋 **M7** Web dashboard (buffer milestone — can ship minimal if schedule tight)
+- 📋 **M8** Relay client + free self-host relay (+ team change-briefing sync)
+- 📋 **M9** VSCode extension (five-state colour system — depends on M2.5 branch + M3.5 briefing)
+- 📋 **M10** Integration + hardening + AGENTS.md generator
+
+---
+
+## Current position
+
+**Active milestone:** 🔨 **M6 (CLI + wrapper) IN PROGRESS** — M6.1, M6.2, M6.2b ✅ DONE, 156 tests.
+Config writes atomic, `meshlock status` live. → 📋 **M6.2c next** (unlock + --force, fully ratified),
+then M6.3 (run wrapper — the last M6 piece). **After M6: install-ready — the Show HN trigger.**
+Fable-5 sprint; teaching → TEACHING-BLOCK.md.
+
+**Built & reviewed so far:** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c, M3.3b, M3.3c, M3.5a, M3.5b, M3.5c, M4.1, M4.2, M4.3, M5.1, M5.1b, M5.1c, M5.2, M6.1, M6.2, **M6.2b**. 156 tests.
+
+<!-- Earlier per-session "Built & reviewed" snapshots retained below as history. -->
+
+**[62 tests]** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c, M3.3b, M3.3c. The cooperation path is real: meshlock self-registers into Claude Code,
+and a live agent coordinates file locks (repo-scoped, branch-aware) through the four tools.
+
+**[61 tests]** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c, M3.3b. Full 4-tool MCP surface, repo-scoped end to end, `meshlock` is now a runnable
+command that self-registers into Claude Code. One step (M3.3c, live) from a real agent calling the tools.
+
+**[57 tests]** M1, M2.1, M2.2, M3.1, M3.1b, M2.5, M3.2, M3.2b, M3.2c, M3.3a,
+S1a, S1b, S1c. Full 4-tool MCP surface, repo-scoped end to end, tree builds.
+Everything needed for an agent to check/acquire/release/survey locks per-repo — EXCEPT the
+registration bridge (M3.3b) that lets a real agent discover the server.
+
+**Side-milestone note:** S1 (repo scoping) is NOT in v6 — spawned by the user-global-registration
+decision. Option B chosen (global DB + repo_root column) for relay-conformance. Slots before
+meshlock init in build order, outside the M-numbering.
+
+**Pending teaching:** Block 6 (NULL three-valued logic, undefined-vs-null, z.infer) proposed
+but not yet done — M2.5 left 3 fuzzies, M3.2 left 2. M3.5a left 3 (`?? null` runtime erasure,
+state-vs-log, null≠undefined) — corrected in-chat at M3.5a review. Clear before they compound.
+
+**Backlog items captured (not lost):**
+- Ensure `data/migrations` ships in the published npm tarball (`files` field) — packaging risk.
+- Read-only DB open path (fail-if-missing) for when the first read-only caller appears.
+- Optional explicit `busy_timeout` pragma in db.ts (currently relying on better-sqlite3 default 5s).
+- Note near the ISO-8601 expiry comparison that all timestamps must share format (UTC Z, ms precision).
+- [M2.5b, after M3.2] Plural cross-branch holders in the warning shape (consumer now exists post-M3.2).
+- [M3.2/M3.3] Surface `branch` in the check_lock tool output.
+- [backlog] Real-git-repo test (named branch resolves) + live stdio-transport registration test (M3.2 issue #3).
+- [ADR] ADR-004: simple-git over manual git shelling / isomorphic-git.
+- [M3.3 verification] Live registration test covers all 3 tools over real transport (M3.2b issue #2). Optional cheap version: SDK in-memory transport, tools/list asserts 3 tool names.
+- [M4 daemon-lifecycle] Guarantee session_id stability across a daemon run; decide regeneration policy (M3.2b issue #3). TTL is the safety net meanwhile.
+- [M5 enhancement] Git hook busts the branch cache on checkout (event-driven invalidation; replaces TTL-guessing for the common case). 5s TTL stays as fallback. (M3.2c issue #1)
+- [conditional] If vitest pool changes forks→threads, chdir in acquire tests breaks; replace with a cwd seam on the handler (pass cwd in rather than reading process.cwd() globally). (M3.2c issue #2)
+- [chore] Shared test/fixtures.ts — makeConfig() is duplicated across acquire/release/team-status test files (M3.3a issue #4).
+- [chore] Rename clearBranchCache() → clearGitCache() — it now clears both branch and repo-root caches; name undersells it (S1a issue #3).
+- [engineering] Structural guard so a future engine query can't silently omit repo_root — a shared repo-scoped query helper or a lint rule. Design when a 6th query appears (S1b issue #1).
+- [engineering] Test asserting expireStaleLocks reaps expired rows ACROSS repos — pins its deliberate global-ness so a maintainer can't add a repo filter and silently break cross-repo reaping (S1b issue #2).
+
+> Product-level "revisit after September" items (selective per-branch release; branchless-vs-branched
+> conflict / issue #1; advisory lock mode; change_log retention; snapshot perf) live in BACKLOG.md,
+> not here. This file tracks build-sequence follow-ons only.
