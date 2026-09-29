@@ -28,7 +28,7 @@ You write every line. The Architect plans and checks your understanding; the Tut
 ## The steps
 
 **Phase 0: Project setup**
-- [ ] 0.1 TypeScript, ESM and pnpm project, with `.gitignore`
+- [x] 0.1 TypeScript, ESM and pnpm project, with `.gitignore`
 - [ ] 0.2 vitest and a first passing test
 
 **Phase 1: Configuration**
