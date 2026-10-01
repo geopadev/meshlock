@@ -29,7 +29,7 @@ You write every line. The Architect plans and checks your understanding; the Tut
 
 **Phase 0: Project setup**
 - [x] 0.1 TypeScript, ESM and pnpm project, with `.gitignore`
-- [ ] 0.2 vitest and a first passing test
+- [x] 0.2 vitest and a first passing test
 
 **Phase 1: Configuration**
 - [ ] 1.1 Config schema with zod, and the type derived from it
