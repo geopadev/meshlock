@@ -82,6 +82,15 @@ You write every line. The Architect plans and checks your understanding; the Tut
 **Phase 10: Command line**
 - [ ] 10.1 Dispatching `status`, `unlock`, `watch`, `serve`, `install-hook` and `hook`
 
+**Deferred: add only when built** (a config value exists only once the code honours it)
+- [ ] D.1 `lock_mode: "advisory"`: a lock that warns but never blocks
+- [ ] D.2 `granularity: "directory"`: one lock covering a whole folder
+- [ ] D.3 Team mode: `mode: "team"` and `relay_url`, with the relay itself
+
+**Silent failures to handle in their steps**
+- 8.1: a custom watcher ignore list must not drop the defaults (`.git`, `node_modules`)
+- 9.3: refuse to install when `core.hooksPath` points git elsewhere
+
 ## Checkpoints
 
 - **After the design stage, 30 October:** the identity model decision may change where the session identifier comes from. That touches configuration and the agent tools, not the lock engine.
