@@ -32,7 +32,7 @@ You write every line. The Architect plans and checks your understanding; the Tut
 - [x] 0.2 vitest and a first passing test
 
 **Phase 1: Configuration**
-- [ ] 1.1 Config schema with zod, and the type derived from it
+- [x] 1.1 Config schema with zod, and the type derived from it
 - [ ] 1.2 Loading: a missing file creates and saves the defaults
 - [ ] 1.3 Loading: malformed or unreadable files throw and are never overwritten
 - [ ] 1.4 Saving atomically, with a temporary file and rename
